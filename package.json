@@ -1,0 +1,58 @@
+{
+  "name": "@exoticknight/labnana-mcp",
+  "version": "1.0.0",
+  "description": "MCP server for the Labnana image generation OpenAPI",
+  "author": "exoticknight",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/exoticknight/labnana-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/exoticknight/labnana-mcp/issues"
+  },
+  "homepage": "https://github.com/exoticknight/labnana-mcp#readme",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "labnana-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "README.zh-CN.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run build && node --test test/mcp-smoke.test.mjs",
+    "test:real": "npm run build && node --test test/e2e-real.test.mjs",
+    "prepack": "npm test"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "labnana",
+    "image-generation",
+    "gemini",
+    "gpt-image-2"
+  ],
+  "license": "Apache-2.0",
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.18.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.23.11",
+    "typescript": "^5.8.0"
+  }
+}
