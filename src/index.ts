@@ -5,10 +5,10 @@ import { LabnanaClient } from "./client.js";
 import { registerTools } from "./tools.js";
 
 const SERVER_NAME = "labnana-mcp";
-const SERVER_VERSION = "1.0.0";
+const SERVER_VERSION = "2.0.0";
 
-function parseArgs(argv: string[]): { apiKey?: string; baseUrl?: string } {
-  const args: { apiKey?: string; baseUrl?: string } = {};
+function parseArgs(argv: string[]): { apiKey?: string; baseUrl?: string; outputDir?: string } {
+  const args: { apiKey?: string; baseUrl?: string; outputDir?: string } = {};
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     const next = () => {
@@ -20,15 +20,17 @@ function parseArgs(argv: string[]): { apiKey?: string; baseUrl?: string } {
     };
     if (arg === "--api-key" || arg === "-k") args.apiKey = next();
     else if (arg === "--base-url") args.baseUrl = next();
+    else if (arg === "--output-dir") args.outputDir = next();
     else if (arg.startsWith("--api-key=")) args.apiKey = arg.slice("--api-key=".length);
     else if (arg.startsWith("--base-url=")) args.baseUrl = arg.slice("--base-url=".length);
-    else throw new Error(`未知参数：${arg}（支持 --api-key、--base-url）`);
+    else if (arg.startsWith("--output-dir=")) args.outputDir = arg.slice("--output-dir=".length);
+    else throw new Error(`未知参数：${arg}（支持 --api-key、--base-url、--output-dir）`);
   }
   return args;
 }
 
 async function main(): Promise<void> {
-  let cli: { apiKey?: string; baseUrl?: string };
+  let cli: { apiKey?: string; baseUrl?: string; outputDir?: string };
   try {
     cli = parseArgs(process.argv.slice(2));
   } catch (error) {
@@ -59,7 +61,9 @@ async function main(): Promise<void> {
     version: SERVER_VERSION,
   });
 
-  registerTools(server, client);
+  registerTools(server, client, {
+    outputDir: cli.outputDir ?? process.env.LABNANA_OUTPUT_DIR,
+  });
 
   const transport = new StdioServerTransport();
   await server.connect(transport);

@@ -2,6 +2,8 @@ import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
+import { mkdtempSync, rmSync, readFileSync, readdirSync } from "node:fs";
+import { tmpdir } from "node:os";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -63,21 +65,32 @@ const ESTIMATE_DATA = {
   },
 };
 
-const TASK_CREATED = { code: 0, message: "", data: { taskId: "task-123", status: "pending" } };
-const TASK_DETAIL = {
-  code: 0,
-  message: "",
-  data: {
-    taskId: "task-123",
-    status: "success",
-    images: [{ url: "https://assets.listenhub.ai/.../0.png", mimeType: "image/png" }],
-    createdAt: 1718230400000,
-    completedAt: 1718230460000,
-  },
+const MOCK_IMAGE_BYTES = "mock-image-bytes";
+
+/** 异步创建接口按 prompt 决定返回的 taskId，供各失败路径测试 */
+const ASYNC_TASK_BY_PROMPT = {
+  __async_fail__: "task-fail",
+  __async_fail_secret__: "task-fail-secret",
+  __async_slow__: "task-slow",
+  __async_rate_limit__: "task-rate-limit",
 };
 
 /** 记录收到的请求，供断言 */
 const received = [];
+
+let mockPort;
+
+function taskSuccessData() {
+  return {
+    taskId: "task-123",
+    status: "success",
+    images: [
+      { url: `http://127.0.0.1:${mockPort}/mock-image.png`, mimeType: "image/png" },
+    ],
+    createdAt: 1718230400000,
+    completedAt: 1718230460000,
+  };
+}
 
 const mockServer = createServer((req, res) => {
   let body = "";
@@ -98,6 +111,10 @@ const mockServer = createServer((req, res) => {
       res.end(JSON.stringify(payload));
     };
 
+    if (req.method === "GET" && url.pathname === "/mock-image.png") {
+      res.writeHead(200, { "Content-Type": "image/png" });
+      return res.end(MOCK_IMAGE_BYTES);
+    }
     if (req.method === "GET" && url.pathname === "/openapi/v1/user/subscription") {
       return json(200, SUBSCRIPTION_DATA);
     }
@@ -161,17 +178,19 @@ const mockServer = createServer((req, res) => {
       return json(200, GENERATION_RESPONSE);
     }
     if (req.method === "POST" && url.pathname === "/openapi/v1/images/generation/async") {
-      return json(202, TASK_CREATED);
+      const bodyJson = body ? JSON.parse(body) : null;
+      const taskId = ASYNC_TASK_BY_PROMPT[bodyJson?.prompt] ?? "task-123";
+      return json(202, { code: 0, message: "", data: { taskId, status: "pending" } });
     }
     if (req.method === "GET" && url.pathname === "/openapi/v1/images/generation/tasks") {
       return json(200, {
         code: 0,
         message: "",
-        data: { items: [TASK_DETAIL.data], page: 1, pageSize: 20, total: 1 },
+        data: { items: [taskSuccessData()], page: 1, pageSize: 20, total: 1 },
       });
     }
     if (req.method === "GET" && url.pathname === "/openapi/v1/images/generation/tasks/task-123") {
-      return json(200, TASK_DETAIL);
+      return json(200, { code: 0, message: "", data: taskSuccessData() });
     }
     if (req.method === "GET" && url.pathname === "/openapi/v1/images/generation/tasks/task-fail") {
       return json(200, {
@@ -205,17 +224,14 @@ const mockServer = createServer((req, res) => {
     if (req.method === "GET" && url.pathname === "/openapi/v1/images/generation/tasks/task-rate-limit") {
       return json(400, { code: 29998, message: "请求过于频繁" });
     }
-    if (req.method === "POST" && url.pathname === "/openapi/v1/images/generation/bad-request") {
-      return json(400, { code: 26004, message: "积分不足" });
-    }
     return json(404, { code: 29003, message: "not found" });
   });
 });
 
-let mockPort;
 let serverProcess;
 let rl;
 let nextId = 1;
+let saveDir;
 
 function startMockServer() {
   return new Promise((resolve) => {
@@ -263,6 +279,7 @@ async function initialize() {
 }
 
 before(async () => {
+  saveDir = mkdtempSync(join(tmpdir(), "labnana-mcp-test-"));
   await startMockServer();
   startMcpServer();
   await new Promise((resolve) => {
@@ -275,19 +292,18 @@ before(async () => {
 after(() => {
   serverProcess?.kill();
   mockServer.close();
+  rmSync(saveDir, { recursive: true, force: true });
 });
 
-test("tools/list 返回全部 7 个工具", async () => {
+test("tools/list 返回全部 5 个工具", async () => {
   const res = await request("tools/list", {});
   const names = res.result.tools.map((t) => t.name).sort();
   assert.deepEqual(names, [
     "estimate_credits",
     "generate_image",
-    "generate_image_async",
     "get_generation_task",
     "get_subscription",
     "list_generation_tasks",
-    "wait_for_generation_task",
   ]);
 });
 
@@ -303,14 +319,14 @@ test("get_subscription 返回订阅数据并携带 Authorization 头", async () 
   assert.equal(req.auth, "Bearer test-key-123");
 });
 
-test("generate_image 返回图片 content block 与元数据", async () => {
+test("generate_image inline 模式返回图片 content block，provider 由 model 自动推导", async () => {
   const res = await request("tools/call", {
     name: "generate_image",
     arguments: {
-      provider: "google",
       model: "gemini-3-pro-image",
       prompt: "A sunset over the sea",
       imageConfig: { imageSize: "2K", aspectRatio: "16:9" },
+      outputMode: "inline",
     },
   });
   assert.equal(res.result.isError, undefined);
@@ -330,37 +346,146 @@ test("generate_image 返回图片 content block 与元数据", async () => {
   });
 });
 
+test("generate_image 默认 file 模式保存图片并返回文件路径", async () => {
+  const res = await request("tools/call", {
+    name: "generate_image",
+    arguments: { prompt: "save me", saveDir },
+  });
+  assert.equal(res.result.isError, undefined);
+  const payload = JSON.parse(res.result.content[0].text);
+  assert.ok(payload.filePath, "应返回 filePath");
+  assert.match(payload.filePath, /labnana-.*\.jpg$/);
+  assert.equal(payload.mimeType, "image/jpeg");
+  assert.equal(payload.modelVersion, "gemini-3-pro-image");
+  const saved = readFileSync(payload.filePath, "utf8");
+  assert.equal(saved, "hello-image", "文件内容应为 base64 解码结果");
+});
+
+test("generate_image 不传 model 时不发送 model 字段，provider 默认 google", async () => {
+  const res = await request("tools/call", {
+    name: "generate_image",
+    arguments: { prompt: "default model", outputMode: "inline" },
+  });
+  assert.equal(res.result.isError, undefined);
+  const req = received.find(
+    (r) => r.path === "/openapi/v1/images/generation" && r.body.prompt === "default model",
+  );
+  assert.equal(req.body.model, undefined, "未传 model 时不应发送");
+  assert.equal(req.body.provider, "google");
+});
+
 test("generate_image 没有图片数据时返回 isError", async () => {
   const res = await request("tools/call", {
     name: "generate_image",
-    arguments: { provider: "google", prompt: "__no_image__" },
+    arguments: { prompt: "__no_image__" },
   });
   assert.equal(res.result.isError, true);
   assert.match(res.result.content[0].text, /未返回图片/);
   assert.match(res.result.content[0].text, /SAFETY/);
 });
 
-test("estimate_credits 正确传参并解析信封", async () => {
+test("estimate_credits 正确传参并自动推导 provider", async () => {
   const res = await request("tools/call", {
     name: "estimate_credits",
-    arguments: { provider: "google", prompt: "test", imageConfig: { imageSize: "1K" } },
+    arguments: { prompt: "test", imageConfig: { imageSize: "1K" } },
   });
   const payload = JSON.parse(res.result.content[0].text);
   assert.equal(payload.credits, 15);
   const req = received.find((r) => r.path === "/openapi/v1/images/generation/estimate-credits");
   assert.equal(req.body.imageConfig.imageSize, "1K");
   assert.equal(req.body.model, undefined, "未传 model 时不应发送");
+  assert.equal(req.body.provider, "google");
 });
 
-test("generate_image_async 创建任务并返回 taskId", async () => {
+test("generate_image 4K 走异步任务：内部轮询、下载并保存文件", async () => {
   const res = await request("tools/call", {
-    name: "generate_image_async",
-    arguments: { provider: "alibaba", model: "wan2.7-image-pro", prompt: "poster" },
+    name: "generate_image",
+    arguments: {
+      model: "gemini-3-pro-image",
+      prompt: "big poster",
+      imageConfig: { imageSize: "4K" },
+      saveDir,
+    },
   });
-  const text = res.result.content[0].text;
-  assert.match(text, /task-123/);
-  const req = received.find((r) => r.path === "/openapi/v1/images/generation/async");
-  assert.equal(req.body.provider, "alibaba");
+  assert.equal(res.result.isError, undefined);
+  const payload = JSON.parse(res.result.content[0].text);
+  assert.equal(payload.taskId, "task-123");
+  assert.match(payload.imageUrl, /mock-image\.png/);
+  assert.match(payload.filePath, /labnana-.*\.png$/);
+  const saved = readFileSync(payload.filePath, "utf8");
+  assert.equal(saved, MOCK_IMAGE_BYTES);
+  const asyncReq = received.find((r) => r.path === "/openapi/v1/images/generation/async");
+  assert.equal(asyncReq.body.provider, "google");
+  assert.equal(asyncReq.body.imageConfig.imageSize, "4K");
+});
+
+test("generate_image 4K inline 模式返回图片链接而非下载", async () => {
+  const res = await request("tools/call", {
+    name: "generate_image",
+    arguments: {
+      prompt: "big inline",
+      imageConfig: { imageSize: "4K" },
+      outputMode: "inline",
+    },
+  });
+  assert.equal(res.result.isError, undefined);
+  const payload = JSON.parse(res.result.content[0].text);
+  assert.equal(payload.taskId, "task-123");
+  assert.match(payload.images[0], /mock-image\.png/);
+});
+
+test("generate_image 异步任务失败返回 isError", async () => {
+  const res = await request("tools/call", {
+    name: "generate_image",
+    arguments: { prompt: "__async_fail__", imageConfig: { imageSize: "4K" }, saveDir },
+  });
+  assert.equal(res.result.isError, true);
+  assert.match(res.result.content[0].text, /失败/);
+});
+
+test("generate_image 异步失败的 failMsg 会脱敏", async () => {
+  const res = await request("tools/call", {
+    name: "generate_image",
+    arguments: { prompt: "__async_fail_secret__", imageConfig: { imageSize: "4K" }, saveDir },
+  });
+  assert.equal(res.result.isError, true);
+  const output = res.result.content[0].text;
+  assert.doesNotMatch(output, /lh_secret_in_fail_msg/);
+  assert.match(output, /Bearer \[REDACTED\]/);
+});
+
+test("generate_image 异步等待超时返回 taskId 且不超过 timeoutSeconds", async () => {
+  const started = Date.now();
+  const res = await request("tools/call", {
+    name: "generate_image",
+    arguments: {
+      prompt: "__async_slow__",
+      imageConfig: { imageSize: "4K" },
+      timeoutSeconds: 1,
+      saveDir,
+    },
+  });
+  const elapsed = Date.now() - started;
+  assert.equal(res.result.isError, true);
+  assert.match(res.result.content[0].text, /超时/);
+  assert.match(res.result.content[0].text, /task-slow/);
+  assert.match(res.result.content[0].text, /get_generation_task/);
+  assert.ok(elapsed < 1800, `等待了 ${elapsed}ms，超过 timeoutSeconds 预期`);
+});
+
+test("generate_image 异步遇到限流时退避而不是立即暴露 API 错误", async () => {
+  const res = await request("tools/call", {
+    name: "generate_image",
+    arguments: {
+      prompt: "__async_rate_limit__",
+      imageConfig: { imageSize: "4K" },
+      timeoutSeconds: 1,
+      saveDir,
+    },
+  });
+  assert.equal(res.result.isError, true);
+  assert.match(res.result.content[0].text, /超时/);
+  assert.doesNotMatch(res.result.content[0].text, /29998/);
 });
 
 test("list_generation_tasks 传分页与状态过滤参数", async () => {
@@ -394,63 +519,10 @@ test("get_generation_task 的 failMsg 会脱敏", async () => {
   assert.match(output, /Bearer \[REDACTED\]/);
 });
 
-test("wait_for_generation_task 轮询到 success", async () => {
-  const res = await request("tools/call", {
-    name: "wait_for_generation_task",
-    arguments: { taskId: "task-123", timeoutSeconds: 10, pollIntervalMs: 500 },
-  });
-  assert.equal(res.result.isError, undefined);
-  const text = res.result.content[0].text;
-  assert.match(text, /success/);
-  assert.match(text, /assets\.listenhub\.ai/);
-});
-
-test("wait_for_generation_task 遇到 fail 返回 isError", async () => {
-  const res = await request("tools/call", {
-    name: "wait_for_generation_task",
-    arguments: { taskId: "task-fail", timeoutSeconds: 10, pollIntervalMs: 500 },
-  });
-  assert.equal(res.result.isError, true);
-  assert.match(res.result.content[0].text, /失败/);
-});
-
-test("wait_for_generation_task 的 failMsg 会脱敏", async () => {
-  const res = await request("tools/call", {
-    name: "wait_for_generation_task",
-    arguments: { taskId: "task-fail-secret", timeoutSeconds: 10, pollIntervalMs: 500 },
-  });
-  assert.equal(res.result.isError, true);
-  const output = res.result.content[0].text;
-  assert.doesNotMatch(output, /lh_secret_in_fail_msg/);
-  assert.match(output, /Bearer \[REDACTED\]/);
-});
-
-test("wait_for_generation_task 不会让单次请求突破 timeoutSeconds", async () => {
-  const started = Date.now();
-  const res = await request("tools/call", {
-    name: "wait_for_generation_task",
-    arguments: { taskId: "task-slow", timeoutSeconds: 1, pollIntervalMs: 500 },
-  });
-  const elapsed = Date.now() - started;
-  assert.equal(res.result.isError, true);
-  assert.match(res.result.content[0].text, /等待超时/);
-  assert.ok(elapsed < 1800, `等待了 ${elapsed}ms，超过 timeoutSeconds 预期`);
-});
-
-test("wait_for_generation_task 遇到限流时退避而不是立即暴露 API 错误", async () => {
-  const res = await request("tools/call", {
-    name: "wait_for_generation_task",
-    arguments: { taskId: "task-rate-limit", timeoutSeconds: 1, pollIntervalMs: 500 },
-  });
-  assert.equal(res.result.isError, true);
-  assert.match(res.result.content[0].text, /等待超时/);
-  assert.doesNotMatch(res.result.content[0].text, /29998/);
-});
-
 test("参数校验失败返回 isError", async () => {
   const res = await request("tools/call", {
     name: "generate_image",
-    arguments: { provider: "google", prompt: "" },
+    arguments: { prompt: "" },
   });
   assert.equal(res.result.isError, true);
   assert.match(res.result.content[0].text, /prompt/);
@@ -460,8 +532,8 @@ test("参考图片支持 fileData 与 inlineData 透传", async () => {
   const res = await request("tools/call", {
     name: "generate_image",
     arguments: {
-      provider: "google",
       prompt: "edit",
+      outputMode: "inline",
       referenceImages: [
         { fileData: { fileUri: "gs://bucket/a.png", mimeType: "image/png" } },
         { inlineData: { data: "base64-data", mimeType: "image/jpeg" } },
@@ -477,10 +549,10 @@ test("参考图片支持 fileData 与 inlineData 透传", async () => {
   assert.equal(req.body.referenceImages[1].inlineData.data, "base64-data");
 });
 
-test("非法 provider 枚举被拒绝", async () => {
+test("非法 model 枚举被拒绝", async () => {
   const res = await request("tools/call", {
     name: "generate_image",
-    arguments: { provider: "microsoft", prompt: "x" },
+    arguments: { model: "dall-e-3", prompt: "x" },
   });
   assert.equal(res.result.isError, true);
 });
@@ -491,19 +563,16 @@ test("模型级参考图、尺寸和宽高比限制在本地拒绝", async () =>
   }));
   const cases = [
     {
-      provider: "openai",
       model: "gpt-image-2",
       prompt: "too many references",
       referenceImages,
     },
     {
-      provider: "alibaba",
       model: "wan2.7-image",
       prompt: "unsupported ratio",
       imageConfig: { aspectRatio: "21:9" },
     },
     {
-      provider: "bytedance",
       model: "seedream-5-0-pro",
       prompt: "unsupported size",
       imageConfig: { imageSize: "4K" },
@@ -520,7 +589,6 @@ test("不支持的参考图片 URI scheme 被拒绝", async () => {
   const res = await request("tools/call", {
     name: "generate_image",
     arguments: {
-      provider: "google",
       prompt: "bad uri",
       referenceImages: [{ fileData: { fileUri: "file:///etc/passwd" } }],
     },
@@ -532,7 +600,7 @@ test("不支持的参考图片 URI scheme 被拒绝", async () => {
 test("2xx 但业务 code 非 0 时按错误处理", async () => {
   const res = await request("tools/call", {
     name: "generate_image",
-    arguments: { provider: "google", prompt: "__insufficient__" },
+    arguments: { prompt: "__insufficient__" },
   });
   assert.equal(res.result.isError, true);
   assert.match(res.result.content[0].text, /26004/);
@@ -542,7 +610,7 @@ test("2xx 但业务 code 非 0 时按错误处理", async () => {
 test("2xx 但响应非 JSON 时返回可读错误", async () => {
   const res = await request("tools/call", {
     name: "generate_image",
-    arguments: { provider: "google", prompt: "__notjson__" },
+    arguments: { prompt: "__notjson__" },
   });
   assert.equal(res.result.isError, true);
   assert.match(res.result.content[0].text, /不是合法 JSON/);
@@ -551,7 +619,7 @@ test("2xx 但响应非 JSON 时返回可读错误", async () => {
 test("错误详情中的敏感字段被脱敏", async () => {
   const res = await request("tools/call", {
     name: "generate_image",
-    arguments: { provider: "google", prompt: "__echo_key__" },
+    arguments: { prompt: "__echo_key__" },
   });
   assert.equal(res.result.isError, true);
   const output = res.result.content[0].text;
@@ -563,7 +631,7 @@ test("错误详情中的敏感字段被脱敏", async () => {
 test("错误详情中的 password 类字段也被脱敏（含嵌套）", async () => {
   const res = await request("tools/call", {
     name: "generate_image",
-    arguments: { provider: "google", prompt: "__echo_password__" },
+    arguments: { prompt: "__echo_password__" },
   });
   assert.equal(res.result.isError, true);
   const output = res.result.content[0].text;
@@ -575,7 +643,7 @@ test("错误详情中的 password 类字段也被脱敏（含嵌套）", async (
 test("错误详情中的 camelCase 键（apiKey/accessKey）也被脱敏", async () => {
   const res = await request("tools/call", {
     name: "generate_image",
-    arguments: { provider: "google", prompt: "__echo_camel__" },
+    arguments: { prompt: "__echo_camel__" },
   });
   assert.equal(res.result.isError, true);
   const output = res.result.content[0].text;
@@ -587,7 +655,7 @@ test("错误详情中的 camelCase 键（apiKey/accessKey）也被脱敏", async
 test("错误详情中的 snake_case token 键与 session/cookie 也被脱敏", async () => {
   const res = await request("tools/call", {
     name: "generate_image",
-    arguments: { provider: "google", prompt: "__echo_token__" },
+    arguments: { prompt: "__echo_token__" },
   });
   assert.equal(res.result.isError, true);
   const output = res.result.content[0].text;
@@ -601,7 +669,7 @@ test("错误详情中的 snake_case token 键与 session/cookie 也被脱敏", a
 test("error.message 内嵌的 lh_ API key 被脱敏", async () => {
   const res = await request("tools/call", {
     name: "generate_image",
-    arguments: { provider: "google", prompt: "__echo_msg_key__" },
+    arguments: { prompt: "__echo_msg_key__" },
   });
   assert.equal(res.result.isError, true);
   const output = res.result.content[0].text;
@@ -613,7 +681,7 @@ test("error.message 内嵌的 lh_ API key 被脱敏", async () => {
 test("非 JSON 响应体中内嵌的凭据被脱敏", async () => {
   const res = await request("tools/call", {
     name: "generate_image",
-    arguments: { provider: "google", prompt: "__notjson_key__" },
+    arguments: { prompt: "__notjson_key__" },
   });
   assert.equal(res.result.isError, true);
   const output = res.result.content[0].text;
@@ -669,4 +737,12 @@ test("超过 20 MB 的请求体在 fetch 前被拒绝", async () => {
     (error) => error?.code === -3 && /20 MB/.test(error.message),
   );
   assert.equal(fetchCalled, false);
+});
+
+test("下载非 https/loopback 图片地址被拒绝", async () => {
+  const { downloadImage } = await import("../dist/output.js");
+  await assert.rejects(
+    () => downloadImage("http://evil.example.com/a.png"),
+    /https|loopback/,
+  );
 });
