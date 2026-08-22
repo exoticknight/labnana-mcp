@@ -43,7 +43,7 @@ npx -y @exoticknight/labnana-mcp
 
 ### DeepSeek Harness（DSH）
 
-通过 DSH 官方 MCP client 插件接入。若要用 `initialize` 返回的版本明确识别支持 MCP Apps 的构建，可固定到 `3.1.0`：
+通过 DSH 官方 MCP client 插件接入。若要用 `initialize` 返回的版本明确识别支持 MCP Apps 的构建，可固定到 `2.1.0`：
 
 ```yaml
 - id: mcp-labnana
@@ -52,12 +52,12 @@ npx -y @exoticknight/labnana-mcp
     serverName: labnana
     transport: stdio
     command: npx
-    args: ['-y', '@exoticknight/labnana-mcp@3.1.0']
+    args: ['-y', '@exoticknight/labnana-mcp@2.1.0']
     env:
       LABNANA_API_KEY: !!js process.env.LABNANA_API_KEY
 ```
 
-DSH 的 MCP bridge 能把受支持的 `ImageContent` 投影给本次调用的视觉模型。3.1 同时为 `generate_image` 和 `get_generation_task` 发布标准 MCP Apps 单文件 View；支持 MCP Apps 的 DSH Web host 会在对话中直接显示预览。stock DSH 通用工具卡仍可能只显示 JSON 兜底，即使模型已经收到图片——这是客户端展示能力限制，不代表生成结果丢失。
+DSH 的 MCP bridge 能把受支持的 `ImageContent` 投影给本次调用的视觉模型。2.1 同时为 `generate_image` 和 `get_generation_task` 发布标准 MCP Apps 单文件 View；支持 MCP Apps 的 DSH Web host 会在对话中直接显示预览。stock DSH 通用工具卡仍可能只显示 JSON 兜底，即使模型已经收到图片——这是客户端展示能力限制，不代表生成结果丢失。
 
 本地源码测试时，使用同一配置，把 `command` 改为 `node`，`args` 改为本仓库 `dist/index.js` 的绝对路径，并把 `cwd` 指向本仓库。当前 stock DSH 只桥接 MCP 工具，通用工具卡不会消费 MCP resource；没有 MCP Apps host 时，模型视觉仍可收到图片，卡片则回退为 JSON。
 
@@ -237,9 +237,9 @@ API 错误会以 `{ code, message }` 返回，并通过带有 `isError: true` �
 | 29003 | 参数错误 | 检查必填字段和模型限制。 |
 | 29998 | 请求过于频繁 | 等待 20–30 秒后重试。 |
 
-## 从 2.x 迁移
+## 从 2.0 迁移到 2.1
 
-3.0 将图片结果统一为跨客户端的 artifact envelope：
+2.1 将图片结果统一为跨客户端的 artifact envelope：
 
 - 默认模式从 `file` 改为 `hybrid`，成功时同时保存原图并返回有界图片预览。
 - 成功、失败和等待中的结果均提供版本化 JSON envelope；成功/任务查询结果声明 `outputSchema` 并返回等值 `structuredContent`。
@@ -247,9 +247,7 @@ API 错误会以 `{ code, message }` 返回，并通过带有 `isError: true` �
 - 需要旧版纯文件行为时显式传 `outputMode=file`；原先直接读取顶层 `filePath` 的调用方应改读 `images[0].filePath`。
 - 最低 Node.js 版本提升到 20.9。
 
-## 从 3.0 迁移到 3.1
-
-3.1 在不改变 3.0 结果 envelope 的前提下增加渐进式 MCP Apps 展示。`generate_image` 与 `get_generation_task` 现在通过新旧两种 MCP Apps 元数据键发布 `ui://` 单文件图片 View；不支持 MCP Apps 的客户端仍会收到顺序不变的 `ImageContent`、JSON 文本与 `structuredContent` 兜底。
+2.1 同时增加渐进式 MCP Apps 展示。`generate_image` 与 `get_generation_task` 通过新旧两种 MCP Apps 元数据键发布 `ui://` 单文件图片 View；不支持 MCP Apps 的客户端仍会收到顺序不变的 `ImageContent`、JSON 文本与 `structuredContent` 兜底。
 
 ## 从 1.x 迁移到 2.0
 
@@ -257,7 +255,7 @@ API 错误会以 `{ code, message }` 返回，并通过带有 `isError: true` �
 
 - 移除了 `generate_image_async` 和 `wait_for_generation_task`；`generate_image` 内部自动处理异步任务与轮询（4K 请求）。
 - 所有工具移除了 `provider` 参数，由 `model` 自动推导。
-- 2.x 的 `generate_image` 默认保存图片到本地并返回文件路径；在 3.0 中请使用上面的统一 envelope。
+- 2.0 的 `generate_image` 默认保存图片到本地并返回文件路径；2.1 改为使用上面的统一 envelope。
 
 ## 开发
 

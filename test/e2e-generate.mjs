@@ -1,7 +1,7 @@
 /**
  * 真实图片生成验证脚本（会扣积分，不纳入 npm test）：
  * 读取 .env 的 LABNANA_API_KEY，走 MCP stdio 调用 generate_image，
- * 验证 3.0 统一 envelope、图片预览和本地原图路径。
+ * 验证 2.1 统一 envelope、图片预览和本地原图路径。
  * 用法：node test/e2e-generate.mjs
  */
 import { spawn } from "node:child_process";

@@ -43,7 +43,7 @@ npx -y @exoticknight/labnana-mcp
 
 ### DeepSeek Harness (DSH)
 
-Add the server through DSH's official MCP client plugin. Pin `3.1.0` when you want the version shown by `initialize` to identify this MCP Apps-capable build:
+Add the server through DSH's official MCP client plugin. Pin `2.1.0` when you want the version shown by `initialize` to identify this MCP Apps-capable build:
 
 ```yaml
 - id: mcp-labnana
@@ -52,12 +52,12 @@ Add the server through DSH's official MCP client plugin. Pin `3.1.0` when you wa
     serverName: labnana
     transport: stdio
     command: npx
-    args: ['-y', '@exoticknight/labnana-mcp@3.1.0']
+    args: ['-y', '@exoticknight/labnana-mcp@2.1.0']
     env:
       LABNANA_API_KEY: !!js process.env.LABNANA_API_KEY
 ```
 
-DSH's MCP bridge can project supported `ImageContent` into the calling vision model. Version 3.1 also publishes a standard MCP Apps single-file View for `generate_image` and `get_generation_task`. An MCP Apps-capable DSH Web host renders the preview inline; a stock generic DSH tool card may still show the JSON fallback even though the model received the image. This is a client presentation limitation, not a lost generation result.
+DSH's MCP bridge can project supported `ImageContent` into the calling vision model. Version 2.1 also publishes a standard MCP Apps single-file View for `generate_image` and `get_generation_task`. An MCP Apps-capable DSH Web host renders the preview inline; a stock generic DSH tool card may still show the JSON fallback even though the model received the image. This is a client presentation limitation, not a lost generation result.
 
 For a local source checkout, use the same row with `command: node`, an absolute `args` path to `dist/index.js`, and `cwd` set to this repository. Current stock DSH builds bridge MCP tools but do not consume MCP resources in the generic tool card. Without an MCP Apps host, model vision still works and the card falls back to JSON.
 
@@ -237,9 +237,9 @@ API errors are returned as `{ code, message }` and exposed as MCP results with `
 | 29003 | Invalid parameters | Check required fields and model-specific limits. |
 | 29998 | Too many requests | Retry with a 20–30 second backoff. |
 
-## Migrating from 2.x
+## Migrating from 2.0 to 2.1
 
-Version 3.0 unifies image results into a cross-client artifact envelope:
+Version 2.1 unifies image results into a cross-client artifact envelope:
 
 - The default changes from `file` to `hybrid`, saving originals and returning bounded image previews together.
 - Successful, failed, and pending results use a versioned JSON envelope; successful generation/task tools declare an `outputSchema` and return equivalent `structuredContent`.
@@ -247,9 +247,7 @@ Version 3.0 unifies image results into a cross-client artifact envelope:
 - For the old file-only behavior, pass `outputMode=file`. Consumers that read top-level `filePath` must now read `images[0].filePath`.
 - The minimum Node.js version is now 20.9.
 
-## Migrating from 3.0 to 3.1
-
-Version 3.1 adds progressive MCP Apps presentation without changing the 3.0 result envelope. `generate_image` and `get_generation_task` now advertise a `ui://` single-file image View using both the current and legacy MCP Apps metadata keys. Clients without MCP Apps support continue to receive the same ordered `ImageContent`, JSON text, and `structuredContent` fallback.
+Version 2.1 also adds progressive MCP Apps presentation. `generate_image` and `get_generation_task` advertise a `ui://` single-file image View using both the current and legacy MCP Apps metadata keys. Clients without MCP Apps support continue to receive the same ordered `ImageContent`, JSON text, and `structuredContent` fallback.
 
 ## Migrating from 1.x to 2.0
 
@@ -257,7 +255,7 @@ Version 2.0 redesigns the tool surface around agent workflows:
 
 - `generate_image_async` and `wait_for_generation_task` were removed; `generate_image` now handles async tasks and polling internally (4K requests).
 - The `provider` parameter was removed everywhere; it is derived from `model`.
-- In 2.x, `generate_image` saved images by default and returned a path. Version 3.0 replaces this with the unified envelope described above.
+- In 2.0, `generate_image` saved images by default and returned a path. Version 2.1 replaces this with the unified envelope described above.
 
 ## Development
 
