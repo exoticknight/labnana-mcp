@@ -5,3 +5,4 @@ dist/
 .env.*
 !.env.example
 .reasonix/
+labnana-client-test-output/

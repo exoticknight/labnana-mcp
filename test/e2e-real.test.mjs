@@ -58,6 +58,8 @@ before(async () => {
     clientInfo: { name: "e2e-real", version: "1.0.0" },
   });
   assert.equal(init.result?.serverInfo?.name, "labnana-mcp");
+  assert.equal(init.result?.serverInfo?.version, "3.1.0");
+  assert.match(init.result?.instructions ?? "", /Labnana MCP v3\.1\.0/);
   serverProcess.stdin.write(
     JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n",
   );
@@ -83,7 +85,6 @@ test("真实 API：estimate_credits 预估不扣积分", { skip: !hasKey && "未
   const res = await request("tools/call", {
     name: "estimate_credits",
     arguments: {
-      provider: "google",
       model: "gemini-3-pro-image",
       prompt: "a red fox in the snow",
       imageConfig: { imageSize: "1K", aspectRatio: "1:1" },

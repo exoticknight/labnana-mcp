@@ -35,6 +35,26 @@ The package can also be started directly with:
 npx -y @exoticknight/labnana-mcp
 ```
 
+### DeepSeek Harness (DSH)
+
+Add the server through DSH's official MCP client plugin. Pin `3.1.0` when you want the version shown by `initialize` to identify this MCP Apps-capable build:
+
+```yaml
+- id: mcp-labnana
+  name: '@deepseek-ai/dsh-mcp-client'
+  config:
+    serverName: labnana
+    transport: stdio
+    command: npx
+    args: ['-y', '@exoticknight/labnana-mcp@3.1.0']
+    env:
+      LABNANA_API_KEY: !!js process.env.LABNANA_API_KEY
+```
+
+DSH's MCP bridge can project supported `ImageContent` into the calling vision model. Version 3.1 also publishes a standard MCP Apps single-file View for `generate_image` and `get_generation_task`. An MCP Apps-capable DSH Web host renders the preview inline; a stock generic DSH tool card may still show the JSON fallback even though the model received the image. This is a client presentation limitation, not a lost generation result.
+
+For a local source checkout, use the same row with `command: node`, an absolute `args` path to `dist/index.js`, and `cwd` set to this repository. Current stock DSH builds bridge MCP tools but do not consume MCP resources in the generic tool card. Inline display therefore needs either an MCP Apps host or a native DSH keyed tool view such as the separate `dsh-labnana` plugin; without one, model vision still works and the card falls back to JSON.
+
 ### Cursor and VS Code
 
 One-click install (replace the placeholder API key after installing):
@@ -102,7 +122,7 @@ Environment variables are recommended because command-line arguments may be visi
 
 | Tool | Description |
 | --- | --- |
-| `generate_image` | One-stop text-to-image / image-to-image / editing. Saves the image to disk and returns the file path by default; 4K requests transparently run as async tasks with internal polling. |
+| `generate_image` | One-stop text-to-image / image-to-image / editing. Saves the original and returns a bounded MCP image preview, structured metadata, and JSON fallback by default; 4K requests poll internally. |
 | `estimate_credits` | Estimate the credits required for a generation without generating an image. |
 | `get_subscription` | Get subscription status, credit balances, and free usage information. |
 | `list_generation_tasks` | List generation task history with pagination and optional status filtering. |
@@ -134,11 +154,36 @@ Environment variables are recommended because command-line arguments may be visi
 }
 ```
 
-By default the generated image is saved to disk and the tool returns the file path. Pass `"outputMode": "inline"` to receive the image as MCP image content instead (useful in Claude Desktop for instant preview), and `"saveDir"` to choose the target directory.
+The default is `outputMode=hybrid`: the full original is saved to disk while a bounded MCP image preview, `structuredContent`, and equivalent JSON text are returned together. This provides progressive compatibility across Codex, Claude Code, Claude Desktop, and other MCP clients. Use `saveDir` to choose the target directory.
+
+All 1K, 2K, 4K, and `get_generation_task` results use the same envelope:
+
+```json
+{
+  "schemaVersion": 1,
+  "status": "succeeded",
+  "taskId": "task-123",
+  "images": [
+    {
+      "index": 0,
+      "mimeType": "image/png",
+      "width": 4096,
+      "height": 4096,
+      "byteLength": 18442231,
+      "sha256": "...",
+      "url": "https://.../original.png",
+      "filePath": "C:\\...\\labnana.png",
+      "preview": { "included": true, "mimeType": "image/jpeg", "width": 1600, "height": 1600 }
+    }
+  ]
+}
+```
+
+Image base64 appears only in standard MCP `ImageContent`, never duplicated into text or structured metadata. Full 4K originals are not inlined; previews have a maximum 1600-pixel edge and target a 2 MiB byte ceiling, while `filePath`/`url` locate the original.
 
 Use `referenceImages` for image-to-image generation and editing. `fileData.fileUri` supports `gs://` and `https://`; small images can be passed as base64 through `inlineData.data`.
 
-4K requests automatically run as asynchronous tasks: the server creates the task, polls until completion (with rate-limit backoff), downloads the result, and saves it — no manual polling needed. If the wait exceeds `timeoutSeconds` (default 300), the tool returns the `taskId` so the result can be fetched later with `get_generation_task`.
+4K requests automatically run as asynchronous tasks: the server creates the task, polls with rate-limit backoff, downloads and saves originals, and creates previews. If the wait exceeds `timeoutSeconds` (default 300), the result has `status=pending` and a `taskId`; this is not treated as generation failure. Fetch the final preview and original URL later with `get_generation_task`.
 
 ### Credit estimation
 
@@ -160,8 +205,8 @@ Use `referenceImages` for image-to-image generation and editing. `fileData.fileU
 - `imageConfig.imageSize`: `1K`, `2K`, or `4K`. `wan2.7-image` does not support 4K; `seedream-5-0-pro` supports only 1K and 2K.
 - `imageConfig.aspectRatio`: `1:1`, `2:3`, `3:2`, `3:4`, `4:3`, `9:16`, `16:9`, `21:9`, `1:4`, `4:1`, `1:8`, or `8:1`. GPT-Image-2 may omit this field and let the service choose; Wan2.7 supports only `1:1`, `16:9`, `9:16`, `4:3`, and `3:4`.
 - `referenceImages`: up to 14 for Gemini, 4 for GPT-Image-2, 9 for Wan2.7, and 10 for Seedream.
-- `outputMode` (`generate_image` only): `file` (default, save to disk and return the path) or `inline` (return MCP image content).
-- `saveDir` / `timeoutSeconds` (`generate_image` only): target directory for `file` mode, and the maximum wait for async (4K) generations.
+- `outputMode` (`generate_image` only): `hybrid` (default, save originals and inline bounded previews), `file` (save originals and return metadata only), or `inline` (do not save to `saveDir`; return a bounded preview, and persist the original to the default recovery directory only when the upstream response has no original URL).
+- `saveDir` / `timeoutSeconds` (`generate_image` only): target directory for `hybrid`/`file` mode, and the maximum wait for async (4K) generations.
 
 ### Credit summary
 
@@ -185,13 +230,27 @@ API errors are returned as `{ code, message }` and exposed as MCP results with `
 | 29003 | Invalid parameters | Check required fields and model-specific limits. |
 | 29998 | Too many requests | Retry with a 20–30 second backoff. |
 
-## Migrating from 1.x
+## Migrating from 2.x
+
+Version 3.0 unifies image results into a cross-client artifact envelope:
+
+- The default changes from `file` to `hybrid`, saving originals and returning bounded image previews together.
+- Successful, failed, and pending results use a versioned JSON envelope; successful generation/task tools declare an `outputSchema` and return equivalent `structuredContent`.
+- `outputMode=inline` now returns a real image preview for 4K results instead of URL-only text.
+- For the old file-only behavior, pass `outputMode=file`. Consumers that read top-level `filePath` must now read `images[0].filePath`.
+- The minimum Node.js version is now 20.9.
+
+## Migrating from 3.0 to 3.1
+
+Version 3.1 adds progressive MCP Apps presentation without changing the 3.0 result envelope. `generate_image` and `get_generation_task` now advertise a `ui://` single-file image View using both the current and legacy MCP Apps metadata keys. Clients without MCP Apps support continue to receive the same ordered `ImageContent`, JSON text, and `structuredContent` fallback.
+
+## Migrating from 1.x to 2.0
 
 Version 2.0 redesigns the tool surface around agent workflows:
 
 - `generate_image_async` and `wait_for_generation_task` were removed; `generate_image` now handles async tasks and polling internally (4K requests).
 - The `provider` parameter was removed everywhere; it is derived from `model`.
-- `generate_image` now saves images to disk by default and returns the file path; the 1.x behavior is available via `"outputMode": "inline"`.
+- In 2.x, `generate_image` saved images by default and returned a path. Version 3.0 replaces this with the unified envelope described above.
 
 ## Development
 
@@ -200,6 +259,8 @@ npm install
 npm run typecheck
 npm test
 ```
+
+To inspect the real single-file MCP App without calling Labnana or spending credits, run `npm run test:ui` and open `http://127.0.0.1:4173/test/mcp-app-host.html`. The local host sends a generated 640×360 PNG fixture through the official AppBridge so the image, status, and metadata can be checked visually.
 
 ## Links
 

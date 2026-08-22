@@ -1,9 +1,19 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult, ImageContent, TextContent } from "@modelcontextprotocol/sdk/types.js";
+import { registerAppTool } from "@modelcontextprotocol/ext-apps/server";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { z } from "zod";
+import { IMAGE_RESULT_UI_META } from "./image-result-ui.js";
+import type { GenerationResultEnvelope } from "./generation-result.js";
 import { LabnanaClient, LabnanaError, sanitizeMessage } from "./client.js";
-import { downloadImage, saveImageFile } from "./output.js";
+import {
+  createImagePreview,
+  describeImage,
+  downloadImage,
+  saveImageFile,
+} from "./output.js";
+import type { ImagePreview } from "./output.js";
 import {
   ASPECT_RATIOS,
   IMAGE_SIZES,
@@ -15,6 +25,7 @@ import type {
   Provider,
   TaskDetailData,
   TaskItem,
+  TaskImage,
   TaskListData,
   TaskStatus,
 } from "./types.js";
@@ -153,23 +164,27 @@ function validateModelLimits(args: GenerationLimitArgs, ctx: z.RefinementCtx): v
   }
 }
 
-const generationArgsSchema = z.object(generationFields).superRefine(validateModelLimits);
+// MCP SDK 需要最外层保持 ZodObject，才能在 tools/list 中发布完整 JSON Schema。
+// 跨字段约束会把 ZodObject 包装成 ZodEffects，因此单独在工具处理器内执行。
+const generationArgsSchema = z.object(generationFields);
+const validatedGenerationArgsSchema = generationArgsSchema.superRefine(validateModelLimits);
 
 const generateImageArgsSchema = z
   .object({
     ...generationFields,
     outputMode: z
-      .enum(["file", "inline"])
+      .enum(["hybrid", "file", "inline"])
       .optional()
       .describe(
-        "结果返回方式：file（默认）把图片保存到本地并返回文件路径，适合 Claude Code 等有文件系统的环境；" +
-          "inline 以 MCP image content 内联返回，适合 Claude Desktop 直接预览",
+          "结果返回方式：hybrid（默认）保存原图并内联有界预览，跨客户端兼容性最好；" +
+          "file 只保存原图并返回定位信息；inline 不保存到 saveDir，有 URL 时返回有界预览，" +
+          "无 URL 时把原图保存到默认恢复目录并返回有界预览",
       ),
     saveDir: z
       .string()
       .min(1)
       .optional()
-      .describe("file 模式下的保存目录，默认取 LABNANA_OUTPUT_DIR 环境变量或当前目录下的 labnana-images/"),
+      .describe("hybrid/file 模式下的保存目录，默认取 LABNANA_OUTPUT_DIR 或当前目录下的 labnana-images/"),
     timeoutSeconds: z
       .number()
       .int()
@@ -177,11 +192,70 @@ const generateImageArgsSchema = z
       .max(3600)
       .optional()
       .describe("生成总超时秒数，默认 300（仅 4K 等异步路径需要等待时生效）"),
-  })
-  .superRefine(validateModelLimits);
+  });
+const validatedGenerateImageArgsSchema = generateImageArgsSchema.superRefine(validateModelLimits);
 
 type GenerationArgs = z.infer<typeof generationArgsSchema>;
 type GenerateImageArgs = z.infer<typeof generateImageArgsSchema>;
+
+const previewResultSchema = z.object({
+  included: z.boolean(),
+  mimeType: z.string().optional(),
+  width: z.number().int().positive().optional(),
+  height: z.number().int().positive().optional(),
+  byteLength: z.number().int().nonnegative().optional(),
+});
+
+const imageArtifactResultSchema = z.object({
+  index: z.number().int().nonnegative(),
+  mimeType: z.string(),
+  width: z.number().int().positive().optional(),
+  height: z.number().int().positive().optional(),
+  byteLength: z.number().int().nonnegative().optional(),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  url: z.string().url().optional(),
+  filePath: z.string().min(1).optional(),
+  preview: previewResultSchema,
+});
+
+const generationResultOutputShape = {
+  schemaVersion: z.literal(1),
+  status: z.enum(["succeeded", "pending", "failed"]),
+  retryable: z.boolean().optional(),
+  message: z.string().optional(),
+  taskId: z.string().optional(),
+  images: z.array(imageArtifactResultSchema),
+  generation: z
+    .object({
+      finishReason: z.string().optional(),
+      modelVersion: z.string().optional(),
+      responseId: z.string().optional(),
+    })
+    .optional(),
+  warnings: z.array(z.string()).optional(),
+  error: z
+    .object({
+      message: z.string(),
+      details: z.unknown().optional(),
+    })
+    .optional(),
+};
+
+const generationResultSchema = z.object(generationResultOutputShape);
+type OutputMode = NonNullable<GenerateImageArgs["outputMode"]>;
+
+interface GeneratedImageSource {
+  data?: Buffer;
+  mimeType?: string;
+  url?: string;
+}
+
+interface PreparedImages {
+  artifacts: GenerationResultEnvelope["images"];
+  previews: ImagePreview[];
+  warnings: string[];
+  unrecoverableOriginals: number[];
+}
 
 function toGenerationRequest(args: GenerationArgs): GenerationRequest {
   return {
@@ -201,22 +275,161 @@ function text(text: string): TextContent {
   return { type: "text", text };
 }
 
+function toGenerationToolResult(
+  envelope: GenerationResultEnvelope,
+  previews: ImagePreview[] = [],
+  isError = false,
+): CallToolResult {
+  const parsed: GenerationResultEnvelope = generationResultSchema.parse(envelope);
+  const content: Array<TextContent | ImageContent> = previews.map((preview) => ({
+    type: "image",
+    data: preview.data.toString("base64"),
+    mimeType: preview.mimeType,
+    annotations: { audience: ["user", "assistant"], priority: 1 },
+  }));
+  content.push(text(JSON.stringify(parsed, null, 2)));
+  return {
+    content,
+    structuredContent: parsed,
+    ...(isError ? { isError: true } : {}),
+  };
+}
+
+async function prepareImages(
+  sources: GeneratedImageSource[],
+  outputMode: OutputMode,
+  saveDir: string,
+  recoveryDir: string,
+): Promise<PreparedImages> {
+  const artifacts: PreparedImages["artifacts"] = [];
+  const previews: ImagePreview[] = [];
+  const warnings: string[] = [];
+  const unrecoverableOriginals: number[] = [];
+  const shouldSave = outputMode !== "inline";
+  const shouldPreview = outputMode !== "file";
+
+  for (const [index, source] of sources.entries()) {
+    let mimeType = source.mimeType ?? "image/png";
+    let width: number | undefined;
+    let height: number | undefined;
+    let byteLength: number | undefined;
+    let sha256: string | undefined;
+    let filePath: string | undefined;
+    let preview: ImagePreview | undefined;
+
+    if (source.data) {
+      byteLength = source.data.byteLength;
+      try {
+        const description = await describeImage(source.data, source.mimeType);
+        mimeType = description.mimeType;
+        width = description.width;
+        height = description.height;
+        byteLength = description.byteLength;
+        sha256 = description.sha256;
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        warnings.push(`图片 ${index + 1} 元数据读取失败：${sanitizeMessage(reason)}`);
+      }
+
+      const mustPersist = shouldSave || !source.url;
+      if (mustPersist) {
+        const targets = [
+          ...(shouldSave ? [saveDir] : []),
+          recoveryDir,
+          path.join(tmpdir(), "labnana-mcp-recovery"),
+        ].filter((target, targetIndex, all) => all.indexOf(target) === targetIndex);
+        const failures: string[] = [];
+        for (const target of targets) {
+          try {
+            filePath = await saveImageFile(target, source.data, mimeType);
+            if (!shouldSave || target !== saveDir) {
+              warnings.push(`图片 ${index + 1} 原图已保存到恢复目录：${filePath}`);
+            }
+            break;
+          } catch (error) {
+            const reason = error instanceof Error ? error.message : String(error);
+            failures.push(`${target}（${sanitizeMessage(reason)}）`);
+          }
+        }
+        if (!filePath) {
+          warnings.push(`图片 ${index + 1} 原图保存失败：${failures.join("；")}`);
+          if (!source.url) unrecoverableOriginals.push(index);
+        }
+      }
+
+      if (shouldPreview || (!filePath && !source.url)) {
+        try {
+          preview = await createImagePreview(source.data, mimeType);
+          previews.push(preview);
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : String(error);
+          warnings.push(`图片 ${index + 1} 预览生成失败：${sanitizeMessage(reason)}`);
+        }
+      }
+    }
+
+    artifacts.push({
+      index,
+      mimeType,
+      ...(width !== undefined ? { width } : {}),
+      ...(height !== undefined ? { height } : {}),
+      ...(byteLength !== undefined ? { byteLength } : {}),
+      ...(sha256 ? { sha256 } : {}),
+      ...(source.url ? { url: source.url } : {}),
+      ...(filePath ? { filePath } : {}),
+      preview: preview
+        ? {
+            included: true,
+            mimeType: preview.mimeType,
+            width: preview.width,
+            height: preview.height,
+            byteLength: preview.byteLength,
+          }
+        : { included: false },
+    });
+  }
+
+  return { artifacts, previews, warnings, unrecoverableOriginals };
+}
+
 // 无边界子串匹配以覆盖 snake_case（access_token）、camelCase（apiKey）、kebab-case（api-key）；
 // 误伤（如 monkey、sessionStart）方向安全，宁可多脱敏
 const SENSITIVE_KEY = /(auth|token|secret|credential|password|passwd|pwd|session|cookie|sid|key)/i;
+const BINARY_CONTAINER_KEY = /^(inlineData|imageData|binaryData|blob)$/i;
+const BINARY_DATA_KEY = /^(data|base64|bytes|content)$/i;
 const MAX_DETAIL_CHARS = 2000;
 
+function looksLikeBase64(value: string): boolean {
+  if (/^data:[^;]+;base64,/i.test(value)) return true;
+  const compact = value.replace(/\s/g, "");
+  return (
+    compact.length >= 32 &&
+    compact.length % 4 === 0 &&
+    /^[A-Za-z0-9+/]+={0,2}$/.test(compact)
+  );
+}
+
 /** 递归脱敏错误详情：敏感键整值替换，其余字符串值再过字符串级凭据脱敏 */
-function sanitizeDetail(value: unknown, depth = 0): unknown {
+function sanitizeDetail(value: unknown, depth = 0, redactData = false): unknown {
   if (depth > 5) return "[深度截断]";
-  if (typeof value === "string") return sanitizeMessage(value);
+  if (typeof value === "string") {
+    return redactData && looksLikeBase64(value)
+      ? "[BINARY_DATA_REDACTED]"
+      : sanitizeMessage(value);
+  }
   if (Array.isArray(value)) {
-    return value.map((item) => sanitizeDetail(item, depth + 1));
+    return value.map((item) => sanitizeDetail(item, depth + 1, redactData));
   }
   if (value !== null && typeof value === "object") {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value)) {
-      out[k] = SENSITIVE_KEY.test(k) ? "[REDACTED]" : sanitizeDetail(v, depth + 1);
+      out[k] = SENSITIVE_KEY.test(k)
+        ? "[REDACTED]"
+        : sanitizeDetail(
+            v,
+            depth + 1,
+            redactData || BINARY_CONTAINER_KEY.test(k) || BINARY_DATA_KEY.test(k),
+          );
     }
     return out;
   }
@@ -258,23 +471,92 @@ function errorResult(error: unknown): CallToolResult {
   return { content: [text(`错误：${sanitizeMessage(message)}`)], isError: true };
 }
 
-/** 从生成响应中提取第一张图片 */
-function extractImage(resp: {
+function generationErrorResult(error: unknown, taskId?: string): CallToolResult {
+  if (error instanceof LabnanaError) {
+    const details =
+      error.detail === undefined || error.detail === null
+        ? undefined
+        : sanitizeDetail(error.detail);
+    return toGenerationToolResult(
+      {
+        schemaVersion: 1,
+        status: "failed",
+        retryable:
+          error.status === 408 ||
+          error.status === 429 ||
+          error.status >= 500 ||
+          error.code === -2 ||
+          error.code === 29998,
+        ...(taskId ? { taskId } : {}),
+        images: [],
+        error: {
+          message: `Labnana API 错误（HTTP ${error.status}，业务码 ${error.code}）：${sanitizeMessage(error.message)}`,
+          ...(details !== undefined ? { details } : {}),
+        },
+      },
+      [],
+      true,
+    );
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return toGenerationToolResult(
+    {
+      schemaVersion: 1,
+      status: "failed",
+      retryable: true,
+      ...(taskId ? { taskId } : {}),
+      images: [],
+      error: { message: `错误：${sanitizeMessage(message)}` },
+    },
+    [],
+    true,
+  );
+}
+
+async function downloadTaskImages(
+  images: TaskImage[],
+): Promise<{ sources: GeneratedImageSource[]; warnings: string[] }> {
+  const sources: GeneratedImageSource[] = [];
+  const warnings: string[] = [];
+  for (const [index, image] of images.entries()) {
+    if (!image.url) {
+      warnings.push(`图片 ${index + 1} 未返回 URL`);
+      continue;
+    }
+    try {
+      const downloaded = await downloadImage(image.url);
+      sources.push({
+        data: downloaded.data,
+        mimeType: downloaded.mimeType ?? image.mimeType,
+        url: image.url,
+      });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      warnings.push(`图片 ${index + 1} 下载失败：${sanitizeMessage(reason)}`);
+      sources.push({ mimeType: image.mimeType, url: image.url });
+    }
+  }
+  return { sources, warnings };
+}
+
+/** 从生成响应中提取全部图片 */
+function extractImages(resp: {
   candidates?: Array<{
     content?: { parts?: Array<{ inlineData?: { mimeType?: string; data?: string } }> };
   }>;
-}): { data: string; mimeType: string } | null {
+}): Array<{ data: string; mimeType: string }> {
+  const images: Array<{ data: string; mimeType: string }> = [];
   for (const candidate of resp.candidates ?? []) {
     for (const part of candidate.content?.parts ?? []) {
       if (part.inlineData?.data) {
-        return {
+        images.push({
           data: part.inlineData.data,
           mimeType: part.inlineData.mimeType ?? "image/png",
-        };
+        });
       }
     }
   }
-  return null;
+  return images;
 }
 
 type PollOutcome =
@@ -363,8 +645,9 @@ export function registerTools(
         "根据模型、尺寸、宽高比等参数预估生成图片所需的积分。同步返回，不实际生成图片、不扣除积分。适合在批量生成或使用 4K 前先确认成本。",
       inputSchema: generationArgsSchema,
     },
-    async (args: GenerationArgs) => {
+    async (unvalidatedArgs: GenerationArgs) => {
       try {
+        const args = validatedGenerationArgsSchema.parse(unvalidatedArgs);
         const data = await client.estimateCredits(toGenerationRequest(args));
         return { content: [text(JSON.stringify(data, null, 2))] };
       } catch (error) {
@@ -373,164 +656,167 @@ export function registerTools(
     },
   );
 
-  server.registerTool(
+  registerAppTool(
+    server,
     "generate_image",
     {
       title: "生成图片",
       description:
-        "文生图 / 图生图 / 改图的一站式工具：传入 prompt（可带参考图片），完成后默认把图片保存到本地并返回文件路径（outputMode=inline 时内联返回图片内容）。" +
+        "文生图 / 图生图 / 改图的一站式工具：默认保存完整原图，同时返回有大小上限的 MCP 图片预览、结构化元数据和 JSON 文本兜底。" +
         "大图（4K）会自动走异步任务并在内部等待完成，无需手动轮询。" +
         "支持 Gemini 系列、GPT-Image-2、Wan2.7、Seedream 5.0 Pro，模型由 model 参数选择，无需指定提供商。",
       inputSchema: generateImageArgsSchema,
+      outputSchema: generationResultOutputShape,
+      _meta: IMAGE_RESULT_UI_META,
     },
-    async (args: GenerateImageArgs) => {
-      const outputMode = args.outputMode ?? "file";
-      const saveDir = args.saveDir ?? defaultOutputDir;
-      const request = toGenerationRequest(args);
-
+    async (unvalidatedArgs: GenerateImageArgs) => {
       try {
+        const args = validatedGenerateImageArgsSchema.parse(unvalidatedArgs);
+        const outputMode = args.outputMode ?? "hybrid";
+        const saveDir = args.saveDir ?? defaultOutputDir;
+        const request = toGenerationRequest(args);
+
         // 4K 响应体过大，走异步任务 + 内部轮询；其余走同步接口
         if (args.imageConfig?.imageSize === "4K") {
           const created = await client.generateImageAsync(request);
           const outcome = await pollTask(client, created.taskId, args.timeoutSeconds ?? 300);
 
           if (outcome.kind === "timeout") {
-            return {
-              content: [
-                text(
-                  `任务已创建但等待超时（最后状态 ${outcome.lastStatus}），taskId=${created.taskId}。` +
-                    `可稍后调用 get_generation_task 获取图片链接。`,
-                ),
-              ],
-              isError: true,
-            };
+            return toGenerationToolResult({
+              schemaVersion: 1,
+              status: "pending",
+              retryable: true,
+              taskId: created.taskId,
+              images: [],
+              message:
+                `任务仍在运行（最后状态 ${outcome.lastStatus}）。` +
+                "可稍后调用 get_generation_task 获取图片预览和原图链接。",
+            });
           }
-          if (outcome.kind === "error") return errorResult(outcome.error);
+          if (outcome.kind === "error") return generationErrorResult(outcome.error, created.taskId);
           if (outcome.kind === "fail") {
-            return {
-              content: [
-                text(`图片生成失败：\n${JSON.stringify(sanitizeTaskDetail(outcome.data), null, 2)}`),
-              ],
-              isError: true,
-            };
+            const detail = sanitizeTaskDetail(outcome.data);
+            return toGenerationToolResult(
+              {
+                schemaVersion: 1,
+                status: "failed",
+                retryable: false,
+                taskId: created.taskId,
+                images: [],
+                error: {
+                  message: `图片生成失败${detail.failMsg ? `：${detail.failMsg}` : ""}`,
+                  details: detail,
+                },
+              },
+              [],
+              true,
+            );
           }
 
           const images = outcome.data.images ?? [];
-          const first = images[0];
-          if (!first?.url) {
-            return {
-              content: [text(`任务成功但未返回图片链接，taskId=${created.taskId}`)],
-              isError: true,
-            };
-          }
-          if (outputMode === "inline") {
-            return {
-              content: [
-                text(
-                  JSON.stringify(
-                    { taskId: created.taskId, images: images.map((img) => img.url) },
-                    null,
-                    2,
-                  ),
-                ),
-              ],
-            };
-          }
-          try {
-            const downloaded = await downloadImage(first.url);
-            const filePath = await saveImageFile(
-              saveDir,
-              downloaded.data,
-              downloaded.mimeType ?? first.mimeType,
+          if (images.length === 0 || images.every((image) => !image.url)) {
+            return toGenerationToolResult(
+              {
+                schemaVersion: 1,
+                status: "failed",
+                retryable: true,
+                taskId: created.taskId,
+                images: [],
+                error: { message: "任务成功但未返回图片链接" },
+              },
+              [],
+              true,
             );
-            return {
-              content: [
-                text(
-                  JSON.stringify(
-                    {
-                      filePath,
-                      imageUrl: first.url,
-                      taskId: created.taskId,
-                      mimeType: downloaded.mimeType ?? first.mimeType,
-                    },
-                    null,
-                    2,
-                  ),
-                ),
-              ],
-            };
-          } catch (saveError) {
-            const reason = saveError instanceof Error ? saveError.message : String(saveError);
-            return {
-              content: [
-                text(
-                  `图片已生成但本地保存失败（${sanitizeMessage(reason)}），可直接使用图片链接：\n` +
-                    JSON.stringify({ taskId: created.taskId, images: images.map((img) => img.url) }, null, 2),
-                ),
-              ],
-            };
           }
+
+          const downloaded = await downloadTaskImages(images);
+          const prepared = await prepareImages(
+            downloaded.sources,
+            outputMode,
+            saveDir,
+            defaultOutputDir,
+          );
+          const warnings = [...downloaded.warnings, ...prepared.warnings];
+          return toGenerationToolResult(
+            {
+              schemaVersion: 1,
+              status: "succeeded",
+              taskId: created.taskId,
+              images: prepared.artifacts,
+              ...(warnings.length > 0 ? { warnings } : {}),
+            },
+            prepared.previews,
+          );
         }
 
         const resp = await client.generateImage(request);
-        const image = extractImage(resp);
-        const meta: Record<string, unknown> = {
-          finishReason: resp.candidates?.[0]?.finishReason,
-          modelVersion: resp.modelVersion,
-          responseId: resp.responseId,
+        const images = extractImages(resp);
+        const generation = {
+          ...(resp.candidates?.[0]?.finishReason
+            ? { finishReason: resp.candidates[0].finishReason }
+            : {}),
+          ...(resp.modelVersion ? { modelVersion: resp.modelVersion } : {}),
+          ...(resp.responseId ? { responseId: resp.responseId } : {}),
         };
-        if (!image) {
-          return {
-            content: [
-              text(
-                `图片生成未返回图片数据：\n${JSON.stringify(
-                  {
-                    ...meta,
-                    safetyRatings: resp.candidates?.[0]?.safetyRatings,
-                    promptFeedback: resp.promptFeedback,
-                  },
-                  null,
-                  2,
-                )}`,
-              ),
-            ],
-            isError: true,
-          };
-        }
-
-        if (outputMode === "inline") {
-          const content: Array<TextContent | ImageContent> = [
-            { type: "image", data: image.data, mimeType: image.mimeType },
-            text(JSON.stringify(meta, null, 2)),
-          ];
-          return { content };
-        }
-
-        try {
-          const filePath = await saveImageFile(
-            saveDir,
-            Buffer.from(image.data, "base64"),
-            image.mimeType,
+        if (images.length === 0) {
+          return toGenerationToolResult(
+            {
+              schemaVersion: 1,
+              status: "failed",
+              retryable: false,
+              images: [],
+              ...(Object.keys(generation).length > 0 ? { generation } : {}),
+              error: {
+                message: "图片生成未返回图片数据",
+                details: {
+                  safetyRatings: resp.candidates?.[0]?.safetyRatings,
+                  promptFeedback: resp.promptFeedback,
+                },
+              },
+            },
+            [],
+            true,
           );
-          return {
-            content: [
-              text(JSON.stringify({ filePath, mimeType: image.mimeType, ...meta }, null, 2)),
-            ],
-          };
-        } catch (saveError) {
-          // 保存失败（如目录不可写）时退回内联返回，不让已扣积分的结果丢失
-          const reason = saveError instanceof Error ? saveError.message : String(saveError);
-          const content: Array<TextContent | ImageContent> = [
-            { type: "image", data: image.data, mimeType: image.mimeType },
-            text(
-              `本地保存失败（${sanitizeMessage(reason)}），已改为内联返回图片。\n` +
-                JSON.stringify(meta, null, 2),
-            ),
-          ];
-          return { content };
         }
+        const prepared = await prepareImages(
+          images.map((image) => ({
+            data: Buffer.from(image.data, "base64"),
+            mimeType: image.mimeType,
+          })),
+          outputMode,
+          saveDir,
+          defaultOutputDir,
+        );
+        if (prepared.unrecoverableOriginals.length > 0) {
+          return toGenerationToolResult(
+            {
+              schemaVersion: 1,
+              status: "failed",
+              retryable: false,
+              images: prepared.artifacts,
+              ...(Object.keys(generation).length > 0 ? { generation } : {}),
+              ...(prepared.warnings.length > 0 ? { warnings: prepared.warnings } : {}),
+              error: {
+                message: "图片已生成，但原图无法保存且上游未提供可恢复链接",
+                details: { imageIndexes: prepared.unrecoverableOriginals },
+              },
+            },
+            prepared.previews,
+            true,
+          );
+        }
+        return toGenerationToolResult(
+          {
+            schemaVersion: 1,
+            status: "succeeded",
+            images: prepared.artifacts,
+            ...(Object.keys(generation).length > 0 ? { generation } : {}),
+            ...(prepared.warnings.length > 0 ? { warnings: prepared.warnings } : {}),
+          },
+          prepared.previews,
+        );
       } catch (error) {
-        return errorResult(error);
+        return generationErrorResult(error);
       }
     },
   );
@@ -560,23 +846,90 @@ export function registerTools(
     },
   );
 
-  server.registerTool(
+  registerAppTool(
+    server,
     "get_generation_task",
     {
       title: "获取图片生成任务详情",
       description:
-        "查询图片生成任务状态与结果。任务成功后 images 字段为公开图片链接数组，可直接下载。" +
+        "查询图片生成任务状态与结果。任务成功时返回统一结构化 envelope、有界 MCP 图片预览和原图 URL。" +
         "generate_image 等待超时后可用返回的 taskId 在这里取回结果。",
       inputSchema: {
         taskId: z.string().min(1, "taskId 不能为空"),
       },
+      outputSchema: generationResultOutputShape,
+      _meta: IMAGE_RESULT_UI_META,
     },
     async (args: { taskId: string }) => {
       try {
-        const data = await client.getTask(args.taskId);
-        return { content: [text(JSON.stringify(sanitizeTaskDetail(data), null, 2))] };
+        const data = sanitizeTaskDetail(await client.getTask(args.taskId));
+        if (data.status === "fail") {
+          return toGenerationToolResult(
+            {
+              schemaVersion: 1,
+              status: "failed",
+              retryable: false,
+              taskId: data.taskId,
+              images: [],
+              error: {
+                message: `图片生成失败${data.failMsg ? `：${data.failMsg}` : ""}`,
+                details: data,
+              },
+            },
+            [],
+            true,
+          );
+        }
+        if (data.status !== "success") {
+          return toGenerationToolResult({
+            schemaVersion: 1,
+            status: "pending",
+            retryable: true,
+            taskId: data.taskId,
+            images: (data.images ?? []).map((image, index) => ({
+              index,
+              mimeType: image.mimeType ?? "image/png",
+              url: image.url,
+              preview: { included: false },
+            })),
+            message: `任务当前状态：${data.status}`,
+          });
+        }
+
+        const downloaded = await downloadTaskImages(data.images ?? []);
+        if (downloaded.sources.length === 0) {
+          return toGenerationToolResult(
+            {
+              schemaVersion: 1,
+              status: "failed",
+              retryable: true,
+              taskId: data.taskId,
+              images: [],
+              error: { message: "任务成功但未返回图片链接", details: data },
+            },
+            [],
+            true,
+          );
+        }
+        const prepared = await prepareImages(
+          downloaded.sources,
+          "inline",
+          defaultOutputDir,
+          defaultOutputDir,
+        );
+        const allWarnings = [...downloaded.warnings, ...prepared.warnings];
+        return toGenerationToolResult(
+          {
+            schemaVersion: 1,
+            status: "succeeded",
+            taskId: data.taskId,
+            images: prepared.artifacts,
+            ...(allWarnings.length > 0 ? { warnings: allWarnings } : {}),
+          },
+          prepared.previews,
+        );
       } catch (error) {
-        return errorResult(error);
+        return generationErrorResult(error, args.taskId);
       }
     },
   );

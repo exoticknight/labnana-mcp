@@ -35,6 +35,26 @@ claude mcp add labnana -- npx -y @exoticknight/labnana-mcp
 npx -y @exoticknight/labnana-mcp
 ```
 
+### DeepSeek Harness（DSH）
+
+通过 DSH 官方 MCP client 插件接入。若要用 `initialize` 返回的版本明确识别支持 MCP Apps 的构建，可固定到 `3.1.0`：
+
+```yaml
+- id: mcp-labnana
+  name: '@deepseek-ai/dsh-mcp-client'
+  config:
+    serverName: labnana
+    transport: stdio
+    command: npx
+    args: ['-y', '@exoticknight/labnana-mcp@3.1.0']
+    env:
+      LABNANA_API_KEY: !!js process.env.LABNANA_API_KEY
+```
+
+DSH 的 MCP bridge 能把受支持的 `ImageContent` 投影给本次调用的视觉模型。3.1 同时为 `generate_image` 和 `get_generation_task` 发布标准 MCP Apps 单文件 View；支持 MCP Apps 的 DSH Web host 会在对话中直接显示预览。stock DSH 通用工具卡仍可能只显示 JSON 兜底，即使模型已经收到图片——这是客户端展示能力限制，不代表生成结果丢失。
+
+本地源码测试时，使用同一配置，把 `command` 改为 `node`，`args` 改为本仓库 `dist/index.js` 的绝对路径，并把 `cwd` 指向本仓库。当前 stock DSH 只桥接 MCP 工具，通用工具卡不会消费 MCP resource；要在对话中内嵌显示，需要 MCP Apps host，或单独的 `dsh-labnana` 原生 keyed tool view。没有这些客户端扩展时，模型视觉仍可收到图片，卡片则回退为 JSON。
+
 ### Cursor 与 VS Code
 
 一键安装（安装后请替换占位 API Key）：
@@ -102,7 +122,7 @@ claude mcp add labnana -- node C:/path/to/labnana-mcp/dist/index.js
 
 | 工具 | 说明 |
 | --- | --- |
-| `generate_image` | 文生图 / 图生图 / 改图一站式工具。默认把图片保存到本地并返回文件路径；4K 请求自动走异步任务并在内部轮询等待。 |
+| `generate_image` | 文生图 / 图生图 / 改图一站式工具。默认保存完整原图，同时返回有界 MCP 图片预览、结构化元数据和 JSON 文本兜底；4K 请求自动异步轮询。 |
 | `estimate_credits` | 预估生成所需积分，不实际生成图片。 |
 | `get_subscription` | 获取订阅状态、积分余额和免费额度信息。 |
 | `list_generation_tasks` | 分页获取生成任务历史，可按状态筛选。 |
@@ -134,11 +154,36 @@ claude mcp add labnana -- node C:/path/to/labnana-mcp/dist/index.js
 }
 ```
 
-默认会把生成的图片保存到本地并返回文件路径。传 `"outputMode": "inline"` 可改为以 MCP 图片内容内联返回（适合 Claude Desktop 直接预览），`"saveDir"` 可指定保存目录。
+默认 `outputMode=hybrid`：完整原图保存到本地，同时返回有大小上限的 MCP 图片预览、`structuredContent` 和等值 JSON 文本。这种模式兼顾 Codex、Claude Code、Claude Desktop 等不同客户端。`saveDir` 可指定保存目录。
+
+结果使用统一 envelope，1K、2K、4K 和 `get_generation_task` 的字段语义一致：
+
+```json
+{
+  "schemaVersion": 1,
+  "status": "succeeded",
+  "taskId": "task-123",
+  "images": [
+    {
+      "index": 0,
+      "mimeType": "image/png",
+      "width": 4096,
+      "height": 4096,
+      "byteLength": 18442231,
+      "sha256": "...",
+      "url": "https://.../original.png",
+      "filePath": "C:\\...\\labnana.png",
+      "preview": { "included": true, "mimeType": "image/jpeg", "width": 1600, "height": 1600 }
+    }
+  ]
+}
+```
+
+图片 base64 只存在于标准 MCP `ImageContent` 中，不会复制进文本或结构化元数据。4K 原图不会直接内联；内联的是长边不超过 1600 像素、目标不超过 2 MiB 的预览，原图通过 `filePath`/`url` 取回。
 
 图生图或改图时，把源图放入 `referenceImages`。`fileData.fileUri` 支持 `gs://` 和 `https://`；小图片也可以通过 `inlineData.data` 传入 base64。
 
-4K 请求会自动走异步任务：服务器内部创建任务、轮询等待（含限流退避）、下载结果并保存，无需手动轮询。等待超过 `timeoutSeconds`（默认 300 秒）时会返回 `taskId`，稍后可用 `get_generation_task` 取回结果。
+4K 请求会自动走异步任务：服务器内部创建任务、轮询等待（含限流退避）、下载原图、保存并生成预览。等待超过 `timeoutSeconds`（默认 300 秒）时返回 `status=pending` 和 `taskId`，这不算生成失败；稍后可用 `get_generation_task` 取回统一格式的预览与原图链接。
 
 ### 预估积分
 
@@ -160,8 +205,8 @@ claude mcp add labnana -- node C:/path/to/labnana-mcp/dist/index.js
 - `imageConfig.imageSize`：`1K`、`2K` 或 `4K`。`wan2.7-image` 不支持 4K；`seedream-5-0-pro` 仅支持 1K 和 2K。
 - `imageConfig.aspectRatio`：`1:1`、`2:3`、`3:2`、`3:4`、`4:3`、`9:16`、`16:9`、`21:9`、`1:4`、`4:1`、`1:8` 或 `8:1`。GPT-Image-2 可以不传此字段，由服务端自动选择；Wan2.7 仅支持 `1:1`、`16:9`、`9:16`、`4:3` 和 `3:4`。
 - `referenceImages`：Gemini 最多 14 张，GPT-Image-2 最多 4 张，Wan2.7 最多 9 张，Seedream 最多 10 张。
-- `outputMode`（仅 `generate_image`）：`file`（默认，保存到本地并返回路径）或 `inline`（内联返回 MCP 图片内容）。
-- `saveDir` / `timeoutSeconds`（仅 `generate_image`）：`file` 模式的保存目录，以及异步（4K）生成的最长等待秒数。
+- `outputMode`（仅 `generate_image`）：`hybrid`（默认，保存原图并内联有界预览）、`file`（只保存原图和返回元数据）或 `inline`（不保存到 `saveDir`；始终返回有界预览，仅当上游没有原图 URL 时才把原图保存到默认恢复目录）。
+- `saveDir` / `timeoutSeconds`（仅 `generate_image`）：`hybrid`/`file` 模式的保存目录，以及异步（4K）生成的最长等待秒数。
 
 ### 积分消耗摘要
 
@@ -185,13 +230,27 @@ API 错误会以 `{ code, message }` 返回，并通过带有 `isError: true` �
 | 29003 | 参数错误 | 检查必填字段和模型限制。 |
 | 29998 | 请求过于频繁 | 等待 20–30 秒后重试。 |
 
-## 从 1.x 迁移
+## 从 2.x 迁移
+
+3.0 将图片结果统一为跨客户端的 artifact envelope：
+
+- 默认模式从 `file` 改为 `hybrid`，成功时同时保存原图并返回有界图片预览。
+- 成功、失败和等待中的结果均提供版本化 JSON envelope；成功/任务查询结果声明 `outputSchema` 并返回等值 `structuredContent`。
+- `outputMode=inline` 对 4K 也会返回实际图片预览，不再只返回 URL 文本。
+- 需要旧版纯文件行为时显式传 `outputMode=file`；原先直接读取顶层 `filePath` 的调用方应改读 `images[0].filePath`。
+- 最低 Node.js 版本提升到 20.9。
+
+## 从 3.0 迁移到 3.1
+
+3.1 在不改变 3.0 结果 envelope 的前提下增加渐进式 MCP Apps 展示。`generate_image` 与 `get_generation_task` 现在通过新旧两种 MCP Apps 元数据键发布 `ui://` 单文件图片 View；不支持 MCP Apps 的客户端仍会收到顺序不变的 `ImageContent`、JSON 文本与 `structuredContent` 兜底。
+
+## 从 1.x 迁移到 2.0
 
 2.0 围绕 agent 工作流重新设计了工具接口：
 
 - 移除了 `generate_image_async` 和 `wait_for_generation_task`；`generate_image` 内部自动处理异步任务与轮询（4K 请求）。
 - 所有工具移除了 `provider` 参数，由 `model` 自动推导。
-- `generate_image` 默认保存图片到本地并返回文件路径；1.x 的行为可通过 `"outputMode": "inline"` 获得。
+- 2.x 的 `generate_image` 默认保存图片到本地并返回文件路径；在 3.0 中请使用上面的统一 envelope。
 
 ## 开发
 
@@ -200,6 +259,8 @@ npm install
 npm run typecheck
 npm test
 ```
+
+如需在完全不调用 Labnana、不消耗积分的情况下检查真实单文件 MCP App，可运行 `npm run test:ui`，再打开 `http://127.0.0.1:4173/test/mcp-app-host.html`。本地 host 会通过官方 AppBridge 发送一张动态生成的 640×360 PNG，用于目视检查图片、状态与元数据。
 
 ## 相关链接
 

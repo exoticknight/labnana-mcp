@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "labnana_v3_fixture": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["test/client-image-fixture.mjs"]
+    }
+  }
+}

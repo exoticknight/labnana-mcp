@@ -2,14 +2,17 @@ import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync, readFileSync, readdirSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import sharp from "sharp";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SERVER_ENTRY = join(__dirname, "..", "dist", "index.js");
+const IMAGE_RESULT_UI_URI = "ui://labnana/image-result.html";
 
 const SUBSCRIPTION_DATA = {
   code: 0,
@@ -34,13 +37,16 @@ const SUBSCRIPTION_DATA = {
   },
 };
 
+const SMALL_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO5GZJcAAAAASUVORK5CYII=";
+
 const GENERATION_RESPONSE = {
   candidates: [
     {
       content: {
         role: "model",
         parts: [
-          { inlineData: { mimeType: "image/jpeg", data: "aGVsbG8taW1hZ2U=" } },
+          { inlineData: { mimeType: "image/png", data: SMALL_PNG_BASE64 } },
         ],
       },
       finishReason: "STOP",
@@ -65,7 +71,7 @@ const ESTIMATE_DATA = {
   },
 };
 
-const MOCK_IMAGE_BYTES = "mock-image-bytes";
+let mockImageBytes;
 
 /** 异步创建接口按 prompt 决定返回的 taskId，供各失败路径测试 */
 const ASYNC_TASK_BY_PROMPT = {
@@ -113,7 +119,7 @@ const mockServer = createServer((req, res) => {
 
     if (req.method === "GET" && url.pathname === "/mock-image.png") {
       res.writeHead(200, { "Content-Type": "image/png" });
-      return res.end(MOCK_IMAGE_BYTES);
+      return res.end(mockImageBytes);
     }
     if (req.method === "GET" && url.pathname === "/openapi/v1/user/subscription") {
       return json(200, SUBSCRIPTION_DATA);
@@ -133,6 +139,44 @@ const mockServer = createServer((req, res) => {
       if (bodyJson?.prompt === "__no_image__") {
         return json(200, {
           candidates: [{ content: { parts: [] }, finishReason: "SAFETY" }],
+        });
+      }
+      if (bodyJson?.prompt === "__large_sync__") {
+        return json(200, {
+          ...GENERATION_RESPONSE,
+          candidates: [
+            {
+              ...GENERATION_RESPONSE.candidates[0],
+              content: {
+                role: "model",
+                parts: [
+                  {
+                    inlineData: {
+                      mimeType: "image/png",
+                      data: mockImageBytes.toString("base64"),
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        });
+      }
+      if (bodyJson?.prompt === "__two_images__") {
+        return json(200, {
+          ...GENERATION_RESPONSE,
+          candidates: [
+            {
+              ...GENERATION_RESPONSE.candidates[0],
+              content: {
+                role: "model",
+                parts: [
+                  { inlineData: { mimeType: "image/png", data: SMALL_PNG_BASE64 } },
+                  { inlineData: { mimeType: "image/png", data: SMALL_PNG_BASE64 } },
+                ],
+              },
+            },
+          ],
         });
       }
       if (bodyJson?.prompt === "__echo_key__") {
@@ -165,6 +209,15 @@ const mockServer = createServer((req, res) => {
             auth_token: "tok-2",
             sessionId: "sess-1",
             cookie: "sid=abc123",
+          },
+        });
+      }
+      if (bodyJson?.prompt === "__echo_inline_data__") {
+        return json(400, {
+          code: 29003,
+          message: "bad request",
+          detail: {
+            payload: { mimeType: "image/png", data: SMALL_PNG_BASE64 },
           },
         });
       }
@@ -249,6 +302,8 @@ function startMcpServer() {
     `http://127.0.0.1:${mockPort}`,
     "--api-key",
     "test-key-123",
+    "--output-dir",
+    saveDir,
   ]);
   rl = readline.createInterface({ input: serverProcess.stdout });
 }
@@ -273,6 +328,9 @@ async function initialize() {
     clientInfo: { name: "smoke-test", version: "1.0.0" },
   });
   assert.equal(init.result?.serverInfo?.name, "labnana-mcp");
+  assert.equal(init.result?.serverInfo?.version, "3.1.0");
+  assert.match(init.result?.instructions ?? "", /Labnana MCP v3\.1\.0/);
+  assert.match(init.result?.instructions ?? "", /MCP Apps 图片 UI/);
   serverProcess.stdin.write(
     JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n",
   );
@@ -280,6 +338,16 @@ async function initialize() {
 
 before(async () => {
   saveDir = mkdtempSync(join(tmpdir(), "labnana-mcp-test-"));
+  mockImageBytes = await sharp({
+    create: {
+      width: 3000,
+      height: 2000,
+      channels: 3,
+      background: { r: 30, g: 120, b: 210 },
+    },
+  })
+    .png()
+    .toBuffer();
   await startMockServer();
   startMcpServer();
   await new Promise((resolve) => {
@@ -305,6 +373,48 @@ test("tools/list 返回全部 5 个工具", async () => {
     "get_subscription",
     "list_generation_tasks",
   ]);
+  for (const toolName of ["generate_image", "get_generation_task"]) {
+    const tool = res.result.tools.find((item) => item.name === toolName);
+    assert.equal(tool.outputSchema.type, "object");
+    assert.deepEqual(tool.outputSchema.required.sort(), ["images", "schemaVersion", "status"]);
+    assert.equal(tool._meta.ui.resourceUri, IMAGE_RESULT_UI_URI);
+    assert.equal(
+      tool._meta["ui/resourceUri"],
+      IMAGE_RESULT_UI_URI,
+      "兼容仍读取旧 MCP Apps 元数据键的 DSH UI host",
+    );
+  }
+  const generateTool = res.result.tools.find((item) => item.name === "generate_image");
+  assert.deepEqual(
+    Object.keys(generateTool.inputSchema.properties ?? {}).sort(),
+    ["imageConfig", "model", "outputMode", "prompt", "referenceImages", "saveDir", "timeoutSeconds"],
+    "真实 MCP 客户端必须能从 tools/list 发现 generate_image 的全部输入字段",
+  );
+  assert.equal(generateTool.inputSchema.properties.imageConfig.type, "object");
+  assert.equal(generateTool.inputSchema.properties.imageConfig.properties.imageSize.type, "string");
+  const estimateTool = res.result.tools.find((item) => item.name === "estimate_credits");
+  assert.deepEqual(
+    Object.keys(estimateTool.inputSchema.properties ?? {}).sort(),
+    ["imageConfig", "model", "prompt", "referenceImages"],
+    "estimate_credits 也必须发布完整输入结构",
+  );
+  assert.equal(estimateTool.inputSchema.properties.imageConfig.type, "object");
+});
+
+test("图片结果工具发布可由 DSH MCP Apps host 读取的单文件 UI", async () => {
+  const listed = await request("resources/list", {});
+  const resource = listed.result.resources.find((item) => item.uri === IMAGE_RESULT_UI_URI);
+  assert.ok(resource, "应发布图片结果 UI 资源");
+  assert.equal(resource.mimeType, "text/html;profile=mcp-app");
+
+  const read = await request("resources/read", { uri: IMAGE_RESULT_UI_URI });
+  assert.equal(read.result.contents.length, 1);
+  assert.equal(read.result.contents[0].uri, IMAGE_RESULT_UI_URI);
+  assert.equal(read.result.contents[0].mimeType, "text/html;profile=mcp-app");
+  assert.match(read.result.contents[0].text, /<!doctype html>/i);
+  assert.match(read.result.contents[0].text, /Labnana 图片结果/);
+  assert.match(read.result.contents[0].text, /image\//);
+  assert.match(read.result.contents[0].text, /base64,/);
 });
 
 test("get_subscription 返回订阅数据并携带 Authorization 头", async () => {
@@ -319,7 +429,7 @@ test("get_subscription 返回订阅数据并携带 Authorization 头", async () 
   assert.equal(req.auth, "Bearer test-key-123");
 });
 
-test("generate_image inline 模式返回图片 content block，provider 由 model 自动推导", async () => {
+test("generate_image inline 模式返回图片、文本和结构化 envelope", async () => {
   const res = await request("tools/call", {
     name: "generate_image",
     arguments: {
@@ -330,13 +440,20 @@ test("generate_image inline 模式返回图片 content block，provider 由 mode
     },
   });
   assert.equal(res.result.isError, undefined);
-  const imageBlock = res.result.content.find((c) => c.type === "image");
+  const imageBlock = res.result.content[0];
   assert.ok(imageBlock, "应包含 image content block");
-  assert.equal(imageBlock.data, "aGVsbG8taW1hZ2U=");
-  assert.equal(imageBlock.mimeType, "image/jpeg");
-  const meta = JSON.parse(res.result.content.find((c) => c.type === "text").text);
-  assert.equal(meta.modelVersion, "gemini-3-pro-image");
-  assert.equal(meta.finishReason, "STOP");
+  assert.equal(imageBlock.type, "image", "图片块应排在第一位以兼容旧客户端");
+  assert.equal(imageBlock.data, SMALL_PNG_BASE64);
+  assert.equal(imageBlock.mimeType, "image/png");
+  assert.deepEqual(imageBlock.annotations.audience, ["user", "assistant"]);
+  const envelope = JSON.parse(res.result.content.find((c) => c.type === "text").text);
+  assert.deepEqual(res.result.structuredContent, envelope);
+  assert.equal(envelope.schemaVersion, 1);
+  assert.equal(envelope.status, "succeeded");
+  assert.equal(envelope.images[0].mimeType, "image/png");
+  assert.equal(envelope.images[0].preview.included, true);
+  assert.equal(envelope.generation.modelVersion, "gemini-3-pro-image");
+  assert.equal(envelope.generation.finishReason, "STOP");
   const req = received.find((r) => r.path === "/openapi/v1/images/generation");
   assert.deepEqual(req.body, {
     provider: "google",
@@ -346,19 +463,82 @@ test("generate_image inline 模式返回图片 content block，provider 由 mode
   });
 });
 
-test("generate_image 默认 file 模式保存图片并返回文件路径", async () => {
+test("generate_image inline 在没有上游 URL 时保存原图并只内联有界预览", async () => {
+  const res = await request("tools/call", {
+    name: "generate_image",
+    arguments: { prompt: "__large_sync__", outputMode: "inline" },
+  });
+  assert.equal(res.result.isError, undefined);
+  const returned = Buffer.from(res.result.content[0].data, "base64");
+  const metadata = await sharp(returned).metadata();
+  assert.equal(Math.max(metadata.width, metadata.height), 1600);
+  const envelope = JSON.parse(res.result.content.find((c) => c.type === "text").text);
+  assert.match(envelope.images[0].filePath, /labnana-.*\.png$/);
+  assert.equal(envelope.images[0].url, undefined);
+  assert.match(envelope.warnings.join("\n"), /恢复目录/);
+  assert.deepEqual(readFileSync(envelope.images[0].filePath), mockImageBytes);
+});
+
+test("generate_image 默认 hybrid 模式同时保存原图并返回预览", async () => {
   const res = await request("tools/call", {
     name: "generate_image",
     arguments: { prompt: "save me", saveDir },
   });
   assert.equal(res.result.isError, undefined);
-  const payload = JSON.parse(res.result.content[0].text);
-  assert.ok(payload.filePath, "应返回 filePath");
-  assert.match(payload.filePath, /labnana-.*\.jpg$/);
-  assert.equal(payload.mimeType, "image/jpeg");
-  assert.equal(payload.modelVersion, "gemini-3-pro-image");
-  const saved = readFileSync(payload.filePath, "utf8");
-  assert.equal(saved, "hello-image", "文件内容应为 base64 解码结果");
+  assert.equal(res.result.content[0].type, "image");
+  const envelope = JSON.parse(res.result.content.find((c) => c.type === "text").text);
+  assert.deepEqual(res.result.structuredContent, envelope);
+  assert.match(envelope.images[0].filePath, /labnana-.*\.png$/);
+  assert.equal(envelope.images[0].mimeType, "image/png");
+  assert.equal(envelope.images[0].width, 1);
+  assert.equal(envelope.images[0].height, 1);
+  assert.match(envelope.images[0].sha256, /^[a-f0-9]{64}$/);
+  const saved = readFileSync(envelope.images[0].filePath);
+  assert.deepEqual(saved, Buffer.from(SMALL_PNG_BASE64, "base64"));
+});
+
+test("generate_image file 模式保留结构化结果但不内联图片", async () => {
+  const res = await request("tools/call", {
+    name: "generate_image",
+    arguments: { prompt: "file only", saveDir, outputMode: "file" },
+  });
+  assert.equal(res.result.isError, undefined);
+  assert.equal(res.result.content.some((c) => c.type === "image"), false);
+  const envelope = JSON.parse(res.result.content.find((c) => c.type === "text").text);
+  assert.deepEqual(res.result.structuredContent, envelope);
+  assert.ok(envelope.images[0].filePath);
+  assert.equal(envelope.images[0].preview.included, false);
+});
+
+test("generate_image 返回上游提供的全部图片", async () => {
+  const res = await request("tools/call", {
+    name: "generate_image",
+    arguments: { prompt: "__two_images__", outputMode: "inline" },
+  });
+  assert.equal(res.result.content.filter((c) => c.type === "image").length, 2);
+  const envelope = JSON.parse(res.result.content.find((c) => c.type === "text").text);
+  assert.equal(envelope.images.length, 2);
+  assert.deepEqual(envelope.images.map((image) => image.index), [0, 1]);
+});
+
+test("generate_image 主保存目录失败时转存恢复目录并返回有界预览", async () => {
+  const notDirectory = join(saveDir, "not-a-directory");
+  writeFileSync(notDirectory, "occupied");
+  const res = await request("tools/call", {
+    name: "generate_image",
+    arguments: { prompt: "__large_sync__", saveDir: notDirectory },
+  });
+  assert.equal(res.result.isError, undefined);
+  assert.equal(res.result.content[0].type, "image");
+  const envelope = JSON.parse(res.result.content.find((c) => c.type === "text").text);
+  assert.equal(envelope.status, "succeeded");
+  assert.match(envelope.images[0].filePath, /labnana-.*\.png$/);
+  assert.equal(envelope.images[0].preview.included, true);
+  assert.match(envelope.warnings.join("\n"), /恢复目录/);
+  const returned = Buffer.from(res.result.content[0].data, "base64");
+  const metadata = await sharp(returned).metadata();
+  assert.equal(Math.max(metadata.width, metadata.height), 1600);
+  assert.deepEqual(readFileSync(envelope.images[0].filePath), mockImageBytes);
 });
 
 test("generate_image 不传 model 时不发送 model 字段，provider 默认 google", async () => {
@@ -380,8 +560,12 @@ test("generate_image 没有图片数据时返回 isError", async () => {
     arguments: { prompt: "__no_image__" },
   });
   assert.equal(res.result.isError, true);
-  assert.match(res.result.content[0].text, /未返回图片/);
-  assert.match(res.result.content[0].text, /SAFETY/);
+  const envelope = JSON.parse(res.result.content[0].text);
+  assert.deepEqual(res.result.structuredContent, envelope);
+  assert.equal(envelope.status, "failed");
+  assert.equal(envelope.retryable, false);
+  assert.match(envelope.error.message, /未返回图片/);
+  assert.equal(envelope.generation.finishReason, "SAFETY");
 });
 
 test("estimate_credits 正确传参并自动推导 provider", async () => {
@@ -397,7 +581,7 @@ test("estimate_credits 正确传参并自动推导 provider", async () => {
   assert.equal(req.body.provider, "google");
 });
 
-test("generate_image 4K 走异步任务：内部轮询、下载并保存文件", async () => {
+test("generate_image 4K 走异步任务并返回有界预览、原图路径和 URL", async () => {
   const res = await request("tools/call", {
     name: "generate_image",
     arguments: {
@@ -408,18 +592,27 @@ test("generate_image 4K 走异步任务：内部轮询、下载并保存文件",
     },
   });
   assert.equal(res.result.isError, undefined);
-  const payload = JSON.parse(res.result.content[0].text);
-  assert.equal(payload.taskId, "task-123");
-  assert.match(payload.imageUrl, /mock-image\.png/);
-  assert.match(payload.filePath, /labnana-.*\.png$/);
-  const saved = readFileSync(payload.filePath, "utf8");
-  assert.equal(saved, MOCK_IMAGE_BYTES);
+  assert.equal(res.result.content[0].type, "image");
+  const preview = Buffer.from(res.result.content[0].data, "base64");
+  const previewMetadata = await sharp(preview).metadata();
+  assert.equal(Math.max(previewMetadata.width, previewMetadata.height), 1600);
+  const envelope = JSON.parse(res.result.content.find((c) => c.type === "text").text);
+  assert.deepEqual(res.result.structuredContent, envelope);
+  assert.equal(envelope.taskId, "task-123");
+  assert.match(envelope.images[0].url, /mock-image\.png/);
+  assert.match(envelope.images[0].filePath, /labnana-.*\.png$/);
+  assert.equal(envelope.images[0].width, 3000);
+  assert.equal(envelope.images[0].height, 2000);
+  assert.equal(envelope.images[0].preview.width, 1600);
+  assert.equal(envelope.images[0].preview.height, 1067);
+  const saved = readFileSync(envelope.images[0].filePath);
+  assert.deepEqual(saved, mockImageBytes);
   const asyncReq = received.find((r) => r.path === "/openapi/v1/images/generation/async");
   assert.equal(asyncReq.body.provider, "google");
   assert.equal(asyncReq.body.imageConfig.imageSize, "4K");
 });
 
-test("generate_image 4K inline 模式返回图片链接而非下载", async () => {
+test("generate_image 4K inline 模式也返回有界图片预览和 URL", async () => {
   const res = await request("tools/call", {
     name: "generate_image",
     arguments: {
@@ -429,9 +622,12 @@ test("generate_image 4K inline 模式返回图片链接而非下载", async () =
     },
   });
   assert.equal(res.result.isError, undefined);
-  const payload = JSON.parse(res.result.content[0].text);
-  assert.equal(payload.taskId, "task-123");
-  assert.match(payload.images[0], /mock-image\.png/);
+  assert.equal(res.result.content[0].type, "image");
+  const envelope = JSON.parse(res.result.content.find((c) => c.type === "text").text);
+  assert.equal(envelope.taskId, "task-123");
+  assert.match(envelope.images[0].url, /mock-image\.png/);
+  assert.equal(envelope.images[0].filePath, undefined);
+  assert.equal(envelope.images[0].preview.included, true);
 });
 
 test("generate_image 异步任务失败返回 isError", async () => {
@@ -440,7 +636,10 @@ test("generate_image 异步任务失败返回 isError", async () => {
     arguments: { prompt: "__async_fail__", imageConfig: { imageSize: "4K" }, saveDir },
   });
   assert.equal(res.result.isError, true);
-  assert.match(res.result.content[0].text, /失败/);
+  const envelope = JSON.parse(res.result.content[0].text);
+  assert.equal(envelope.status, "failed");
+  assert.equal(envelope.retryable, false);
+  assert.match(envelope.error.message, /失败/);
 });
 
 test("generate_image 异步失败的 failMsg 会脱敏", async () => {
@@ -466,10 +665,12 @@ test("generate_image 异步等待超时返回 taskId 且不超过 timeoutSeconds
     },
   });
   const elapsed = Date.now() - started;
-  assert.equal(res.result.isError, true);
-  assert.match(res.result.content[0].text, /超时/);
-  assert.match(res.result.content[0].text, /task-slow/);
-  assert.match(res.result.content[0].text, /get_generation_task/);
+  assert.equal(res.result.isError, undefined, "任务仍在运行不是生成失败");
+  const envelope = JSON.parse(res.result.content[0].text);
+  assert.equal(envelope.status, "pending");
+  assert.equal(envelope.retryable, true);
+  assert.equal(envelope.taskId, "task-slow");
+  assert.match(envelope.message, /get_generation_task/);
   assert.ok(elapsed < 1800, `等待了 ${elapsed}ms，超过 timeoutSeconds 预期`);
 });
 
@@ -483,8 +684,9 @@ test("generate_image 异步遇到限流时退避而不是立即暴露 API 错误
       saveDir,
     },
   });
-  assert.equal(res.result.isError, true);
-  assert.match(res.result.content[0].text, /超时/);
+  assert.equal(res.result.isError, undefined);
+  const envelope = JSON.parse(res.result.content[0].text);
+  assert.equal(envelope.status, "pending");
   assert.doesNotMatch(res.result.content[0].text, /29998/);
 });
 
@@ -499,14 +701,19 @@ test("list_generation_tasks 传分页与状态过滤参数", async () => {
   assert.deepEqual(req.query, { page: "2", pageSize: "10", status: "success" });
 });
 
-test("get_generation_task 返回任务详情", async () => {
+test("get_generation_task 成功时返回统一 envelope 和图片预览", async () => {
   const res = await request("tools/call", {
     name: "get_generation_task",
     arguments: { taskId: "task-123" },
   });
-  const payload = JSON.parse(res.result.content[0].text);
-  assert.equal(payload.status, "success");
-  assert.equal(payload.images[0].mimeType, "image/png");
+  assert.equal(res.result.content[0].type, "image");
+  const envelope = JSON.parse(res.result.content.find((c) => c.type === "text").text);
+  assert.deepEqual(res.result.structuredContent, envelope);
+  assert.equal(envelope.status, "succeeded");
+  assert.equal(envelope.taskId, "task-123");
+  assert.equal(envelope.images[0].mimeType, "image/png");
+  assert.equal(envelope.images[0].preview.included, true);
+  assert.equal(envelope.images[0].filePath, undefined);
 });
 
 test("get_generation_task 的 failMsg 会脱敏", async () => {
@@ -517,6 +724,9 @@ test("get_generation_task 的 failMsg 会脱敏", async () => {
   const output = res.result.content[0].text;
   assert.doesNotMatch(output, /lh_secret_in_fail_msg/);
   assert.match(output, /Bearer \[REDACTED\]/);
+  const envelope = JSON.parse(output);
+  assert.equal(envelope.status, "failed");
+  assert.deepEqual(res.result.structuredContent, envelope);
 });
 
 test("参数校验失败返回 isError", async () => {
@@ -666,6 +876,19 @@ test("错误详情中的 snake_case token 键与 session/cookie 也被脱敏", a
   assert.match(output, /REDACTED/);
 });
 
+test("错误详情中的图片 base64 不进入文本或 structuredContent", async () => {
+  const res = await request("tools/call", {
+    name: "generate_image",
+    arguments: { prompt: "__echo_inline_data__" },
+  });
+  assert.equal(res.result.isError, true);
+  const output = res.result.content[0].text;
+  assert.doesNotMatch(output, new RegExp(SMALL_PNG_BASE64));
+  assert.match(output, /BINARY_DATA_REDACTED/);
+  assert.doesNotMatch(JSON.stringify(res.result.structuredContent), new RegExp(SMALL_PNG_BASE64));
+  assert.equal(res.result.structuredContent.retryable, false);
+});
+
 test("error.message 内嵌的 lh_ API key 被脱敏", async () => {
   const res = await request("tools/call", {
     name: "generate_image",
@@ -745,4 +968,19 @@ test("下载非 https/loopback 图片地址被拒绝", async () => {
     () => downloadImage("http://evil.example.com/a.png"),
     /https|loopback/,
   );
+});
+
+test("有界预览同时遵守像素和字节预算", async () => {
+  const { createImagePreview, MAX_PREVIEW_BYTES, MAX_PREVIEW_EDGE } =
+    await import("../dist/output.js");
+  const width = 2200;
+  const height = 2200;
+  const noisyPng = await sharp(randomBytes(width * height * 3), {
+    raw: { width, height, channels: 3 },
+  })
+    .png({ compressionLevel: 0 })
+    .toBuffer();
+  const preview = await createImagePreview(noisyPng, "image/png");
+  assert.ok(preview.byteLength <= MAX_PREVIEW_BYTES);
+  assert.ok(Math.max(preview.width, preview.height) <= MAX_PREVIEW_EDGE);
 });

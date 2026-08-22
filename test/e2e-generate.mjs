@@ -1,7 +1,7 @@
 /**
  * 真实图片生成验证脚本（会扣积分，不纳入 npm test）：
- * 读取 .env 的 LABNANA_API_KEY，走 MCP stdio 调用 generate_image_async →
- * wait_for_generation_task，验证完整异步生成链路并打印公开图片 URL。
+ * 读取 .env 的 LABNANA_API_KEY，走 MCP stdio 调用 generate_image，
+ * 验证 3.0 统一 envelope、图片预览和本地原图路径。
  * 用法：node test/e2e-generate.mjs
  */
 import { spawn } from "node:child_process";
@@ -66,56 +66,35 @@ async function main() {
     server.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
 
     const existingTaskId = process.argv[2];
-    let taskId;
-    if (existingTaskId) {
-      console.log(`使用已有任务：taskId=${existingTaskId}`);
-      taskId = existingTaskId;
-    } else {
-      console.log("1/3 创建异步生成任务（gemini-3-pro-image 1K 1:1）...");
-      const created = await req("tools/call", {
-        name: "generate_image_async",
-        arguments: {
-          provider: "google",
-          model: "gemini-3-pro-image",
-          prompt: "一只红色狐狸在雪地里奔跑，阳光洒在雪面上，摄影风格",
-          imageConfig: { imageSize: "1K", aspectRatio: "1:1" },
-        },
-      });
-      if (created.result?.isError) {
-        console.error("创建任务失败：", created.result.content[0].text);
-        process.exitCode = 1;
-        return;
-      }
-      const taskMatch = created.result.content[0].text.match(/"taskId":\s*"([^"]+)"/);
-      taskId = taskMatch ? taskMatch[1] : null;
-      if (!taskId) {
-        console.error("未能从响应中解析 taskId：", created.result.content[0].text);
-        process.exitCode = 1;
-        return;
-      }
-      console.log(`任务已创建：taskId=${taskId}`);
-    }
-
-    console.log("2/3 等待任务完成（最长 180s）...");
-    const waited = await req("tools/call", {
-      name: "wait_for_generation_task",
-      arguments: { taskId, timeoutSeconds: 180, pollIntervalMs: 3000 },
-    });
-    if (waited.result?.isError) {
-      console.error("任务失败：", waited.result.content[0].text);
+    const response = existingTaskId
+      ? await req("tools/call", {
+          name: "get_generation_task",
+          arguments: { taskId: existingTaskId },
+        })
+      : await req("tools/call", {
+          name: "generate_image",
+          arguments: {
+            model: "gemini-3-pro-image",
+            prompt: "一只红色狐狸在雪地里奔跑，阳光洒在雪面上，摄影风格",
+            imageConfig: { imageSize: "1K", aspectRatio: "1:1" },
+          },
+        });
+    if (response.result?.isError) {
+      console.error("生成失败：", response.result.content.at(-1)?.text);
       process.exitCode = 1;
       return;
     }
-    const text = waited.result.content[0].text;
-    const jsonStart = text.indexOf("{");
-    const taskDetail = JSON.parse(jsonStart >= 0 ? text.slice(jsonStart) : text);
-    console.log(`任务状态：${taskDetail.status}`);
-
-    console.log("3/3 结果：");
-    for (const img of taskDetail.images ?? []) {
-      console.log(`  [${img.mimeType}] ${img.url}`);
+    const envelope = response.result.structuredContent;
+    console.log(`状态：${envelope.status}`);
+    console.log(`图片预览块：${response.result.content.filter((item) => item.type === "image").length}`);
+    for (const image of envelope.images ?? []) {
+      console.log(`  [${image.mimeType}] ${image.filePath ?? image.url ?? "无原图定位符"}`);
     }
-    console.log("生成链路验证成功 ✅");
+    if (envelope.status === "pending") {
+      console.log(`任务仍在运行，稍后重新执行：node test/e2e-generate.mjs ${envelope.taskId}`);
+    } else {
+      console.log("生成链路验证成功 ✅");
+    }
   } catch (error) {
     console.error("验证失败：", error.message);
     process.exitCode = 1;

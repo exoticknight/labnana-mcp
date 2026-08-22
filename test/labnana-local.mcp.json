@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "labnana_v3_local": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "--env-file=.env",
+        "dist/index.js",
+        "--output-dir",
+        "labnana-client-test-output"
+      ]
+    }
+  }
+}

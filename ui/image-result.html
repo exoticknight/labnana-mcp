@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Labnana 图片结果</title>
+  </head>
+  <body>
+    <main aria-live="polite">
+      <header>
+        <div>
+          <p class="eyebrow">LABNANA</p>
+          <h1>图片结果</h1>
+        </div>
+        <span id="status" class="status">等待结果</span>
+      </header>
+      <section id="gallery" class="gallery" aria-label="生成图片"></section>
+      <p id="message" class="message">正在等待图片生成结果…</p>
+      <section id="details" class="details" hidden>
+        <h2>结果信息</h2>
+        <dl id="metadata"></dl>
+      </section>
+    </main>
+    <script type="module" src="./image-result-app.ts"></script>
+  </body>
+</html>

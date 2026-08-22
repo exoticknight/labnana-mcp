@@ -1,6 +1,6 @@
 {
   "name": "@exoticknight/labnana-mcp",
-  "version": "2.0.0",
+  "version": "3.1.0",
   "description": "MCP server for the Labnana image generation OpenAPI",
   "author": "exoticknight",
   "repository": {
@@ -23,11 +23,12 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc -p tsconfig.ui.json && vite build --configLoader runner && tsc",
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.ui.json",
     "test": "npm run build && node --test test/mcp-smoke.test.mjs",
+    "test:ui": "vite --config test/vite.config.ts --configLoader runner",
     "test:real": "npm run build && node --test test/e2e-real.test.mjs",
     "prepack": "npm test"
   },
@@ -44,15 +45,19 @@
     "access": "public"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20.9"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.18.0",
+    "@modelcontextprotocol/ext-apps": "^1.7.5",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "sharp": "^0.35.3",
     "zod": "^3.25.0"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
     "tsx": "^4.23.11",
-    "typescript": "^5.8.0"
+    "typescript": "^5.8.0",
+    "vite": "^7.3.6",
+    "vite-plugin-singlefile": "^2.3.3"
   }
 }

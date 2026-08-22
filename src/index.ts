@@ -1,11 +1,19 @@
 #!/usr/bin/env node
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { createRequire } from "node:module";
 import { LabnanaClient } from "./client.js";
+import { registerImageResultUi } from "./image-result-ui.js";
 import { registerTools } from "./tools.js";
 
 const SERVER_NAME = "labnana-mcp";
-const SERVER_VERSION = "2.0.0";
+const { version: SERVER_VERSION } = createRequire(import.meta.url)("../package.json") as {
+  version: string;
+};
+const SERVER_INSTRUCTIONS =
+  `Labnana MCP v${SERVER_VERSION}. ` +
+  "generate_image 返回标准 MCP ImageContent 有界预览、MCP Apps 图片 UI、JSON 文本、structuredContent 和原图定位信息。" +
+  "生成图片会消耗积分；生成前可先调用 estimate_credits，成功后不要自动重试。";
 
 function parseArgs(argv: string[]): { apiKey?: string; baseUrl?: string; outputDir?: string } {
   const args: { apiKey?: string; baseUrl?: string; outputDir?: string } = {};
@@ -56,11 +64,15 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const server = new McpServer({
-    name: SERVER_NAME,
-    version: SERVER_VERSION,
-  });
+  const server = new McpServer(
+    {
+      name: SERVER_NAME,
+      version: SERVER_VERSION,
+    },
+    { instructions: SERVER_INSTRUCTIONS },
+  );
 
+  registerImageResultUi(server);
   registerTools(server, client, {
     outputDir: cli.outputDir ?? process.env.LABNANA_OUTPUT_DIR,
   });
