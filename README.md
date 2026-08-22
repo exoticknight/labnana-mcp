@@ -25,6 +25,8 @@ Current OpenAPI models (product names mapped to the `model` parameter):
 
 ## Installation
 
+Requires Node.js 20.9 or later.
+
 ### Claude Code
 
 1. Create an API key in the [Labnana API Keys](https://labnana.com/api-keys) console.
@@ -236,26 +238,6 @@ API errors are returned as `{ code, message }` and exposed as MCP results with `
 | 26004 | Insufficient credits | Check the subscription or upgrade the plan. |
 | 29003 | Invalid parameters | Check required fields and model-specific limits. |
 | 29998 | Too many requests | Retry with a 20–30 second backoff. |
-
-## Migrating from 2.0 to 2.1
-
-Version 2.1 unifies image results into a cross-client artifact envelope:
-
-- The default changes from `file` to `hybrid`, saving originals and returning bounded image previews together.
-- Successful, failed, and pending results use a versioned JSON envelope; successful generation/task tools declare an `outputSchema` and return equivalent `structuredContent`.
-- `outputMode=inline` now returns a real image preview for 4K results instead of URL-only text.
-- For the old file-only behavior, pass `outputMode=file`. Consumers that read top-level `filePath` must now read `images[0].filePath`.
-- The minimum Node.js version is now 20.9.
-
-Version 2.1 also adds progressive MCP Apps presentation. `generate_image` and `get_generation_task` advertise a `ui://` single-file image View using both the current and legacy MCP Apps metadata keys. Clients without MCP Apps support continue to receive the same ordered `ImageContent`, JSON text, and `structuredContent` fallback.
-
-## Migrating from 1.x to 2.0
-
-Version 2.0 redesigns the tool surface around agent workflows:
-
-- `generate_image_async` and `wait_for_generation_task` were removed; `generate_image` now handles async tasks and polling internally (4K requests).
-- The `provider` parameter was removed everywhere; it is derived from `model`.
-- In 2.0, `generate_image` saved images by default and returned a path. Version 2.1 replaces this with the unified envelope described above.
 
 ## Development
 
