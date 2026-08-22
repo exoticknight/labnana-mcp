@@ -8,12 +8,18 @@
 
 An [MCP](https://modelcontextprotocol.io) server for the [Labnana OpenAPI](https://labnana.com/docs/openapi/guide). It enables Claude, Claude Code, and other MCP clients to generate and edit images with Labnana.
 
-Supported model families include:
+Current OpenAPI models (product names mapped to the `model` parameter):
 
-- Gemini image models (Nano Banana Pro / 2)
-- GPT-Image-2
-- Wan2.7 Image / Pro
-- Seedream 5.0 Pro, including precise editing
+| Product name | `model` | Provider | Resolutions | Best for |
+| --- | --- | --- | --- | --- |
+| Nano Banana Pro | `gemini-3-pro-image` | Google | 1K / 2K / 4K | In-image text, character consistency, high-fidelity output |
+| Nano Banana 2 | `gemini-3.1-flash-image` | Google | 1K / 2K / 4K | Fast iteration and extreme aspect ratios |
+| GPT-Image-2 | `gpt-image-2` | OpenAI | 1K / 2K / 4K | Spec-driven generation, layout control, illustration |
+| Wan2.7 Image Pro | `wan2.7-image-pro` | Alibaba | 1K / 2K / 4K¹ | Photoreal and poster-style images |
+| Wan2.7 Image | `wan2.7-image` | Alibaba | 1K / 2K | Lower-cost everyday generation |
+| Seedream 5.0 Pro | `seedream-5-0-pro` | ByteDance | 1K / 2K | Coordinate-driven region editing and Chinese instructions |
+
+¹ `wan2.7-image-pro` supports 4K only for text-to-image; generations with reference images are limited to 2K. Treat the [Labnana OpenAPI guide](https://labnana.com/docs/openapi/guide) as authoritative for model IDs.
 
 [GitHub](https://github.com/exoticknight/labnana-mcp) · [npm](https://www.npmjs.com/package/@exoticknight/labnana-mcp) · [中文文档](README.zh-CN.md)
 
@@ -53,7 +59,7 @@ Add the server through DSH's official MCP client plugin. Pin `3.1.0` when you wa
 
 DSH's MCP bridge can project supported `ImageContent` into the calling vision model. Version 3.1 also publishes a standard MCP Apps single-file View for `generate_image` and `get_generation_task`. An MCP Apps-capable DSH Web host renders the preview inline; a stock generic DSH tool card may still show the JSON fallback even though the model received the image. This is a client presentation limitation, not a lost generation result.
 
-For a local source checkout, use the same row with `command: node`, an absolute `args` path to `dist/index.js`, and `cwd` set to this repository. Current stock DSH builds bridge MCP tools but do not consume MCP resources in the generic tool card. Inline display therefore needs either an MCP Apps host or a native DSH keyed tool view such as the separate `dsh-labnana` plugin; without one, model vision still works and the card falls back to JSON.
+For a local source checkout, use the same row with `command: node`, an absolute `args` path to `dist/index.js`, and `cwd` set to this repository. Current stock DSH builds bridge MCP tools but do not consume MCP resources in the generic tool card. Without an MCP Apps host, model vision still works and the card falls back to JSON.
 
 ### Cursor and VS Code
 
@@ -202,9 +208,10 @@ Use `referenceImages` for image-to-image generation and editing. `fileData.fileU
 ## Parameters
 
 - `model` (default: `gemini-3-pro-image`): `gemini-3-pro-image`, `gemini-3.1-flash-image`, `gpt-image-2`, `wan2.7-image-pro`, `wan2.7-image`, or `seedream-5-0-pro`. The provider is derived from the model automatically.
-- `imageConfig.imageSize`: `1K`, `2K`, or `4K`. `wan2.7-image` does not support 4K; `seedream-5-0-pro` supports only 1K and 2K.
+- `imageConfig.imageSize`: `1K`, `2K`, or `4K`. `wan2.7-image` and `seedream-5-0-pro` do not support 4K; `wan2.7-image-pro` also disallows 4K when reference images are present.
 - `imageConfig.aspectRatio`: `1:1`, `2:3`, `3:2`, `3:4`, `4:3`, `9:16`, `16:9`, `21:9`, `1:4`, `4:1`, `1:8`, or `8:1`. GPT-Image-2 may omit this field and let the service choose; Wan2.7 supports only `1:1`, `16:9`, `9:16`, `4:3`, and `3:4`.
-- `referenceImages`: up to 14 for Gemini, 4 for GPT-Image-2, 9 for Wan2.7, and 10 for Seedream.
+- `referenceImages`: OpenAPI allows up to 14 for Gemini, 4 for GPT-Image-2, 9 for Wan2.7, and 10 for Seedream. These are API limits, not the separate upload limits of the web generator.
+- Seedream precise editing: put the source image in `referenceImages` and describe the target region and change in `prompt` using absolute coordinates from the top-left origin. OpenAPI has no separate `mask` or `region` parameter.
 - `outputMode` (`generate_image` only): `hybrid` (default, save originals and inline bounded previews), `file` (save originals and return metadata only), or `inline` (do not save to `saveDir`; return a bounded preview, and persist the original to the default recovery directory only when the upstream response has no original URL).
 - `saveDir` / `timeoutSeconds` (`generate_image` only): target directory for `hybrid`/`file` mode, and the maximum wait for async (4K) generations.
 

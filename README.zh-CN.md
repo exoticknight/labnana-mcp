@@ -8,12 +8,18 @@
 
 这是一个面向 [Labnana OpenAPI](https://labnana.com/docs/openapi/guide) 的 [MCP](https://modelcontextprotocol.io) 服务器，可让 Claude、Claude Code 及其他 MCP 客户端通过 Labnana 生成和编辑图片。
 
-支持的模型系列包括：
+当前 OpenAPI 模型（产品名与 `model` 参数的对应关系）：
 
-- Gemini 图片模型（Nano Banana Pro / 2）
-- GPT-Image-2
-- Wan2.7 Image / Pro
-- Seedream 5.0 Pro，包含精准编辑
+| 产品名 | `model` | 提供商 | 分辨率 | 适合场景 |
+| --- | --- | --- | --- | --- |
+| Nano Banana Pro | `gemini-3-pro-image` | Google | 1K / 2K / 4K | 文字渲染、角色一致性、高保真成图 |
+| Nano Banana 2 | `gemini-3.1-flash-image` | Google | 1K / 2K / 4K | 快速迭代、超长宽比 |
+| GPT-Image-2 | `gpt-image-2` | OpenAI | 1K / 2K / 4K | 严格按说明生成、版式控制、插画 |
+| Wan2.7 Image Pro | `wan2.7-image-pro` | Alibaba | 1K / 2K / 4K¹ | 写实与海报风格 |
+| Wan2.7 Image | `wan2.7-image` | Alibaba | 1K / 2K | 较低成本的日常生成 |
+| Seedream 5.0 Pro | `seedream-5-0-pro` | ByteDance | 1K / 2K | 坐标驱动的区域级编辑、中文指令 |
+
+¹ `wan2.7-image-pro` 仅文生图支持 4K；带参考图时最高 2K。模型 ID 以 [Labnana OpenAPI 接入指南](https://labnana.com/docs/openapi/guide) 为准。
 
 [GitHub](https://github.com/exoticknight/labnana-mcp) · [npm](https://www.npmjs.com/package/@exoticknight/labnana-mcp) · [English documentation](README.md)
 
@@ -53,7 +59,7 @@ npx -y @exoticknight/labnana-mcp
 
 DSH 的 MCP bridge 能把受支持的 `ImageContent` 投影给本次调用的视觉模型。3.1 同时为 `generate_image` 和 `get_generation_task` 发布标准 MCP Apps 单文件 View；支持 MCP Apps 的 DSH Web host 会在对话中直接显示预览。stock DSH 通用工具卡仍可能只显示 JSON 兜底，即使模型已经收到图片——这是客户端展示能力限制，不代表生成结果丢失。
 
-本地源码测试时，使用同一配置，把 `command` 改为 `node`，`args` 改为本仓库 `dist/index.js` 的绝对路径，并把 `cwd` 指向本仓库。当前 stock DSH 只桥接 MCP 工具，通用工具卡不会消费 MCP resource；要在对话中内嵌显示，需要 MCP Apps host，或单独的 `dsh-labnana` 原生 keyed tool view。没有这些客户端扩展时，模型视觉仍可收到图片，卡片则回退为 JSON。
+本地源码测试时，使用同一配置，把 `command` 改为 `node`，`args` 改为本仓库 `dist/index.js` 的绝对路径，并把 `cwd` 指向本仓库。当前 stock DSH 只桥接 MCP 工具，通用工具卡不会消费 MCP resource；没有 MCP Apps host 时，模型视觉仍可收到图片，卡片则回退为 JSON。
 
 ### Cursor 与 VS Code
 
@@ -202,9 +208,10 @@ claude mcp add labnana -- node C:/path/to/labnana-mcp/dist/index.js
 ## 参数
 
 - `model`（默认：`gemini-3-pro-image`）：`gemini-3-pro-image`、`gemini-3.1-flash-image`、`gpt-image-2`、`wan2.7-image-pro`、`wan2.7-image` 或 `seedream-5-0-pro`。提供商由模型自动推导，无需指定。
-- `imageConfig.imageSize`：`1K`、`2K` 或 `4K`。`wan2.7-image` 不支持 4K；`seedream-5-0-pro` 仅支持 1K 和 2K。
+- `imageConfig.imageSize`：`1K`、`2K` 或 `4K`。`wan2.7-image` 与 `seedream-5-0-pro` 不支持 4K；`wan2.7-image-pro` 带参考图时也不支持 4K。
 - `imageConfig.aspectRatio`：`1:1`、`2:3`、`3:2`、`3:4`、`4:3`、`9:16`、`16:9`、`21:9`、`1:4`、`4:1`、`1:8` 或 `8:1`。GPT-Image-2 可以不传此字段，由服务端自动选择；Wan2.7 仅支持 `1:1`、`16:9`、`9:16`、`4:3` 和 `3:4`。
-- `referenceImages`：Gemini 最多 14 张，GPT-Image-2 最多 4 张，Wan2.7 最多 9 张，Seedream 最多 10 张。
+- `referenceImages`：OpenAPI 限制为 Gemini 最多 14 张、GPT-Image-2 最多 4 张、Wan2.7 最多 9 张、Seedream 最多 10 张；这与网页生成器的上传数量限制不是同一口径。
+- Seedream 精准编辑：把源图放入 `referenceImages`，在 `prompt` 中用以左上角为原点的绝对坐标描述修改区域和目标内容。OpenAPI 没有独立的 `mask` 或 `region` 参数。
 - `outputMode`（仅 `generate_image`）：`hybrid`（默认，保存原图并内联有界预览）、`file`（只保存原图和返回元数据）或 `inline`（不保存到 `saveDir`；始终返回有界预览，仅当上游没有原图 URL 时才把原图保存到默认恢复目录）。
 - `saveDir` / `timeoutSeconds`（仅 `generate_image`）：`hybrid`/`file` 模式的保存目录，以及异步（4K）生成的最长等待秒数。
 
