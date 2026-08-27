@@ -264,3 +264,11 @@ npm test
 ## 许可证
 
 [Apache-2.0](LICENSE)
+
+
+## 社区
+
+- [LINUX DO](https://linux.do/)
+- [MCP 官方 Registry](https://registry.modelcontextprotocol.io/?q=io.github.exoticknight%2Flabnana-mcp)
+- [Glama](https://glama.ai/mcp/servers/exoticknight/labnana-mcp)
+- [GitHub Issues](https://github.com/exoticknight/labnana-mcp/issues)
