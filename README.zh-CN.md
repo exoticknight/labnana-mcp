@@ -5,6 +5,8 @@
 [![CI](https://github.com/exoticknight/labnana-mcp/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/exoticknight/labnana-mcp/actions/workflows/ci.yml)
 [![node](https://img.shields.io/node/v/%40exoticknight%2Flabnana-mcp)](package.json)
 [![License](https://img.shields.io/npm/l/%40exoticknight%2Flabnana-mcp)](LICENSE)
+[![MCP Registry](https://img.shields.io/badge/MCP_Registry-listed-5A45FF)](https://registry.modelcontextprotocol.io/?q=io.github.exoticknight%2Flabnana-mcp)
+[![labnana-mcp MCP server](https://glama.ai/mcp/servers/exoticknight/labnana-mcp/badges/score.svg)](https://glama.ai/mcp/servers/exoticknight/labnana-mcp)
 
 这是一个面向 [Labnana OpenAPI](https://labnana.com/docs/openapi/guide) 的 [MCP](https://modelcontextprotocol.io) 服务器，可让 Claude、Claude Code 及其他 MCP 客户端通过 Labnana 生成和编辑图片。
 
@@ -21,7 +23,7 @@
 
 ¹ `wan2.7-image-pro` 仅文生图支持 4K；带参考图时最高 2K。模型 ID 以 [Labnana OpenAPI 接入指南](https://labnana.com/docs/openapi/guide) 为准。
 
-[GitHub](https://github.com/exoticknight/labnana-mcp) · [npm](https://www.npmjs.com/package/@exoticknight/labnana-mcp) · [English documentation](README.md)
+[GitHub](https://github.com/exoticknight/labnana-mcp) · [npm](https://www.npmjs.com/package/@exoticknight/labnana-mcp) · [MCP Registry](https://registry.modelcontextprotocol.io/?q=io.github.exoticknight%2Flabnana-mcp) · [Glama](https://glama.ai/mcp/servers/exoticknight/labnana-mcp) · [English documentation](README.md)
 
 ## 安装
 
@@ -45,7 +47,7 @@ npx -y @exoticknight/labnana-mcp
 
 ### DeepSeek Harness（DSH）
 
-通过 DSH 官方 MCP client 插件接入。若要用 `initialize` 返回的版本明确识别支持 MCP Apps 的构建，可固定到 `2.1.0`：
+通过 DSH 官方 MCP client 插件接入。若要用 `initialize` 返回的版本明确识别支持 MCP Apps 的构建，可固定到 `2.1.1`：
 
 ```yaml
 - id: mcp-labnana
@@ -54,7 +56,7 @@ npx -y @exoticknight/labnana-mcp
     serverName: labnana
     transport: stdio
     command: npx
-    args: ['-y', '@exoticknight/labnana-mcp@2.1.0']
+    args: ['-y', '@exoticknight/labnana-mcp@2.1.1']
     env:
       LABNANA_API_KEY: !!js process.env.LABNANA_API_KEY
 ```
@@ -255,6 +257,8 @@ npm test
 - [Labnana OpenAPI 文档](https://docs.marswave.ai/openapi-labnana.html)
 - [积分指南](https://labnana.com/docs/pricing/credits)
 - [GitHub 仓库](https://github.com/exoticknight/labnana-mcp)
+- [官方 MCP Registry](https://registry.modelcontextprotocol.io/?q=io.github.exoticknight%2Flabnana-mcp)
+- [Glama 目录](https://glama.ai/mcp/servers/exoticknight/labnana-mcp)
 - 技术支持：support@marswave.ai
 
 ## 许可证

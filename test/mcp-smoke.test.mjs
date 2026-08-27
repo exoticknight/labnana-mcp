@@ -328,8 +328,8 @@ async function initialize() {
     clientInfo: { name: "smoke-test", version: "1.0.0" },
   });
   assert.equal(init.result?.serverInfo?.name, "labnana-mcp");
-  assert.equal(init.result?.serverInfo?.version, "2.1.0");
-  assert.match(init.result?.instructions ?? "", /Labnana MCP v2\.1\.0/);
+  assert.equal(init.result?.serverInfo?.version, "2.1.1");
+  assert.match(init.result?.instructions ?? "", /Labnana MCP v2\.1\.1/);
   assert.match(init.result?.instructions ?? "", /MCP Apps 图片 UI/);
   serverProcess.stdin.write(
     JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n",
