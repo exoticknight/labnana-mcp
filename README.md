@@ -5,6 +5,8 @@
 [![CI](https://github.com/exoticknight/labnana-mcp/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/exoticknight/labnana-mcp/actions/workflows/ci.yml)
 [![node](https://img.shields.io/node/v/%40exoticknight%2Flabnana-mcp)](package.json)
 [![License](https://img.shields.io/npm/l/%40exoticknight%2Flabnana-mcp)](LICENSE)
+[![MCP Registry](https://img.shields.io/badge/MCP_Registry-listed-5A45FF)](https://registry.modelcontextprotocol.io/?q=io.github.exoticknight%2Flabnana-mcp)
+[![labnana-mcp MCP server](https://glama.ai/mcp/servers/exoticknight/labnana-mcp/badges/score.svg)](https://glama.ai/mcp/servers/exoticknight/labnana-mcp)
 
 An [MCP](https://modelcontextprotocol.io) server for the [Labnana OpenAPI](https://labnana.com/docs/openapi/guide). It enables Claude, Claude Code, and other MCP clients to generate and edit images with Labnana.
 
@@ -21,7 +23,7 @@ Current OpenAPI models (product names mapped to the `model` parameter):
 
 ¹ `wan2.7-image-pro` supports 4K only for text-to-image; generations with reference images are limited to 2K. Treat the [Labnana OpenAPI guide](https://labnana.com/docs/openapi/guide) as authoritative for model IDs.
 
-[GitHub](https://github.com/exoticknight/labnana-mcp) · [npm](https://www.npmjs.com/package/@exoticknight/labnana-mcp) · [中文文档](README.zh-CN.md)
+[GitHub](https://github.com/exoticknight/labnana-mcp) · [npm](https://www.npmjs.com/package/@exoticknight/labnana-mcp) · [MCP Registry](https://registry.modelcontextprotocol.io/?q=io.github.exoticknight%2Flabnana-mcp) · [Glama](https://glama.ai/mcp/servers/exoticknight/labnana-mcp) · [中文文档](README.zh-CN.md)
 
 ## Installation
 
@@ -45,7 +47,7 @@ npx -y @exoticknight/labnana-mcp
 
 ### DeepSeek Harness (DSH)
 
-Add the server through DSH's official MCP client plugin. Pin `2.1.0` when you want the version shown by `initialize` to identify this MCP Apps-capable build:
+Add the server through DSH's official MCP client plugin. Pin `2.1.1` when you want the version shown by `initialize` to identify this MCP Apps-capable build:
 
 ```yaml
 - id: mcp-labnana
@@ -54,7 +56,7 @@ Add the server through DSH's official MCP client plugin. Pin `2.1.0` when you wa
     serverName: labnana
     transport: stdio
     command: npx
-    args: ['-y', '@exoticknight/labnana-mcp@2.1.0']
+    args: ['-y', '@exoticknight/labnana-mcp@2.1.1']
     env:
       LABNANA_API_KEY: !!js process.env.LABNANA_API_KEY
 ```
@@ -255,6 +257,8 @@ To inspect the real single-file MCP App without calling Labnana or spending cred
 - [Labnana OpenAPI reference](https://docs.marswave.ai/openapi-labnana.html)
 - [Credit guide](https://labnana.com/docs/pricing/credits)
 - [GitHub repository](https://github.com/exoticknight/labnana-mcp)
+- [Official MCP Registry](https://registry.modelcontextprotocol.io/?q=io.github.exoticknight%2Flabnana-mcp)
+- [Glama directory](https://glama.ai/mcp/servers/exoticknight/labnana-mcp)
 - Technical support: support@marswave.ai
 
 ## License
