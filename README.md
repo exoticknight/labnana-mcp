@@ -264,3 +264,11 @@ To inspect the real single-file MCP App without calling Labnana or spending cred
 ## License
 
 [Apache-2.0](LICENSE)
+
+
+## Community
+
+- [LINUX DO](https://linux.do/)
+- [Official MCP Registry](https://registry.modelcontextprotocol.io/?q=io.github.exoticknight%2Flabnana-mcp)
+- [Glama](https://glama.ai/mcp/servers/exoticknight/labnana-mcp)
+- [GitHub Issues](https://github.com/exoticknight/labnana-mcp/issues)
