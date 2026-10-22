@@ -17,11 +17,13 @@
 | Nano Banana Pro | `gemini-3-pro-image` | Google | 1K / 2K / 4K | 文字渲染、角色一致性、高保真成图 |
 | Nano Banana 2 | `gemini-3.1-flash-image` | Google | 1K / 2K / 4K | 快速迭代、超长宽比 |
 | GPT-Image-2 | `gpt-image-2` | OpenAI | 1K / 2K / 4K | 严格按说明生成、版式控制、插画 |
+| GPT-Image-2.5 Flare | `gpt-image-2.5-flare` | OpenAI | 1K / 2K / 4K | 更快出图 |
+| GPT-Image-2.5 Sunburst | `gpt-image-2.5-sunburst` | OpenAI | 1K / 2K / 4K | 细节更密集的图片 |
 | Wan2.7 Image Pro | `wan2.7-image-pro` | Alibaba | 1K / 2K / 4K¹ | 写实与海报风格 |
 | Wan2.7 Image | `wan2.7-image` | Alibaba | 1K / 2K | 较低成本的日常生成 |
 | Seedream 5.0 Pro | `seedream-5-0-pro` | ByteDance | 1K / 2K | 坐标驱动的区域级编辑、中文指令 |
 
-¹ `wan2.7-image-pro` 仅文生图支持 4K；带参考图时最高 2K。模型 ID 以 [Labnana OpenAPI 接入指南](https://labnana.com/docs/openapi/guide) 为准。
+¹ `wan2.7-image-pro` 仅文生图支持 4K；带参考图时最高 2K。OpenAPI 文档已列出 GPT-Image-2.5 Flare 和 Sunburst；模型页说明支持 1K / 2K / 4K 和 10 种宽高比，接入指南的模型列表尚未同步。两个变体最多支持 4 张参考图，价格相同；生成前请用 `estimate_credits` 查询当前价格。
 
 [GitHub](https://github.com/exoticknight/labnana-mcp) · [npm](https://www.npmjs.com/package/@exoticknight/labnana-mcp) · [MCP Registry](https://registry.modelcontextprotocol.io/?q=io.github.exoticknight%2Flabnana-mcp) · [Glama](https://glama.ai/mcp/servers/exoticknight/labnana-mcp) · [English documentation](README.md)
 
@@ -211,10 +213,10 @@ claude mcp add labnana -- node C:/path/to/labnana-mcp/dist/index.js
 
 ## 参数
 
-- `model`（默认：`gemini-3-pro-image`）：`gemini-3-pro-image`、`gemini-3.1-flash-image`、`gpt-image-2`、`wan2.7-image-pro`、`wan2.7-image` 或 `seedream-5-0-pro`。提供商由模型自动推导，无需指定。
+- `model`（默认：`gemini-3-pro-image`）：`gemini-3-pro-image`、`gemini-3.1-flash-image`、`gpt-image-2`、`gpt-image-2.5-flare`、`gpt-image-2.5-sunburst`、`wan2.7-image-pro`、`wan2.7-image` 或 `seedream-5-0-pro`。提供商由模型自动推导，无需指定。GPT-Image-2.5 生成前可先用 `estimate_credits` 确认尺寸和积分。
 - `imageConfig.imageSize`：`1K`、`2K` 或 `4K`。`wan2.7-image` 与 `seedream-5-0-pro` 不支持 4K；`wan2.7-image-pro` 带参考图时也不支持 4K。
-- `imageConfig.aspectRatio`：`1:1`、`2:3`、`3:2`、`3:4`、`4:3`、`9:16`、`16:9`、`21:9`、`1:4`、`4:1`、`1:8` 或 `8:1`。GPT-Image-2 可以不传此字段，由服务端自动选择；Wan2.7 仅支持 `1:1`、`16:9`、`9:16`、`4:3` 和 `3:4`。
-- `referenceImages`：OpenAPI 限制为 Gemini 最多 14 张、GPT-Image-2 最多 4 张、Wan2.7 最多 9 张、Seedream 最多 10 张；这与网页生成器的上传数量限制不是同一口径。
+- `imageConfig.aspectRatio`：`1:1`、`2:3`、`3:2`、`3:4`、`4:3`、`4:5`、`5:4`、`9:16`、`16:9`、`21:9`、`1:4`、`4:1`、`1:8` 或 `8:1`。GPT-Image-2 可以不传此字段，由服务端自动选择；GPT-Image-2.5 支持从 `1:1` 到 `21:9` 的 10 种比例；Wan2.7 仅支持 `1:1`、`16:9`、`9:16`、`4:3` 和 `3:4`。
+- `referenceImages`：OpenAPI 限制为 Gemini 最多 14 张、GPT-Image-2 / GPT-Image-2.5 最多 4 张、Wan2.7 最多 9 张、Seedream 最多 10 张；这与网页生成器的上传数量限制不是同一口径。
 - Seedream 精准编辑：把源图放入 `referenceImages`，在 `prompt` 中用以左上角为原点的绝对坐标描述修改区域和目标内容。OpenAPI 没有独立的 `mask` 或 `region` 参数。
 - `outputMode`（仅 `generate_image`）：`hybrid`（默认，保存原图并内联有界预览）、`file`（只保存原图和返回元数据）或 `inline`（不保存到 `saveDir`；始终返回有界预览，仅当上游没有原图 URL 时才把原图保存到默认恢复目录）。
 - `saveDir` / `timeoutSeconds`（仅 `generate_image`）：`hybrid`/`file` 模式的保存目录，以及异步（4K）生成的最长等待秒数。
@@ -229,6 +231,12 @@ claude mcp add labnana -- node C:/path/to/labnana-mcp/dist/index.js
 | `wan2.7-image-pro` | 6 | 8 | 12（仅文生图） |
 | `wan2.7-image` | 4 | 6 | 不支持 |
 | `seedream-5-0-pro` | 6 | 15 | 不支持 |
+
+GPT-Image-2.5 Flare 和 Sunburst 的价格相同，但接入指南尚未列出各尺寸的积分数。请对目标模型与 `imageConfig` 调用 `estimate_credits`，以确认当前积分消耗和支持的配置。
+
+### 免费额度
+
+`get_subscription` 会返回 `freeUsages`。该额度与 Labnana 网页端、ListenHub App 共用。Nano Banana Pro 免费额度仅适用于 1K / 2K，4K 始终按积分计费。纯免费账户使用这项免费额度时，可能收到低优先级通道的可重试繁忙错误；重试不会消耗免费次数或积分。
 
 ## 错误
 
@@ -255,6 +263,7 @@ npm test
 
 - [Labnana 接入指南](https://labnana.com/docs/openapi/guide)
 - [Labnana OpenAPI 文档](https://docs.marswave.ai/openapi-labnana.html)
+- [Labnana 模型目录](https://labnana.com/models)
 - [积分指南](https://labnana.com/docs/pricing/credits)
 - [GitHub 仓库](https://github.com/exoticknight/labnana-mcp)
 - [官方 MCP Registry](https://registry.modelcontextprotocol.io/?q=io.github.exoticknight%2Flabnana-mcp)

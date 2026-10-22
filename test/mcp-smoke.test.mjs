@@ -385,6 +385,7 @@ test("tools/list 返回全部 5 个工具", async () => {
     );
   }
   const generateTool = res.result.tools.find((item) => item.name === "generate_image");
+  assert.match(generateTool.description, /GPT-Image-2 \/ 2\.5/);
   assert.deepEqual(
     Object.keys(generateTool.inputSchema.properties ?? {}).sort(),
     ["imageConfig", "model", "outputMode", "prompt", "referenceImages", "saveDir", "timeoutSeconds"],
@@ -612,6 +613,30 @@ test("generate_image 4K 走异步任务并返回有界预览、原图路径和 U
   assert.equal(asyncReq.body.imageConfig.imageSize, "4K");
 });
 
+test("generate_image routes GPT Image 2.5 through OpenAI with 4K and 5:4", async () => {
+  const prompt = "GPT Image 2.5 detail poster";
+  const res = await request("tools/call", {
+    name: "generate_image",
+    arguments: {
+      model: "gpt-image-2.5-sunburst",
+      prompt,
+      imageConfig: { imageSize: "4K", aspectRatio: "5:4" },
+      outputMode: "inline",
+    },
+  });
+  assert.equal(res.result.isError, undefined, res.result.content?.[0]?.text);
+
+  const asyncReq = received.find(
+    (record) => record.path === "/openapi/v1/images/generation/async" && record.body.prompt === prompt,
+  );
+  assert.deepEqual(asyncReq.body, {
+    provider: "openai",
+    model: "gpt-image-2.5-sunburst",
+    prompt,
+    imageConfig: { imageSize: "4K", aspectRatio: "5:4" },
+  });
+});
+
 test("generate_image 4K inline 模式也返回有界图片预览和 URL", async () => {
   const res = await request("tools/call", {
     name: "generate_image",
@@ -767,6 +792,40 @@ test("非法 model 枚举被拒绝", async () => {
   assert.equal(res.result.isError, true);
 });
 
+test("GPT Image 2.5 variants pass estimate requests through OpenAI with four references", async () => {
+  const referenceImages = Array.from({ length: 4 }, (_, index) => ({
+    inlineData: { data: `image-${index}`, mimeType: "image/png" },
+  }));
+
+  for (const [model, aspectRatio] of [
+    ["gpt-image-2.5-flare", "4:5"],
+    ["gpt-image-2.5-sunburst", "5:4"],
+  ]) {
+    const prompt = `estimate ${model}`;
+    const res = await request("tools/call", {
+      name: "estimate_credits",
+      arguments: {
+        model,
+        prompt,
+        referenceImages,
+        imageConfig: { imageSize: "4K", aspectRatio },
+      },
+    });
+    assert.equal(res.result.isError, undefined, res.result.content?.[0]?.text);
+
+    const req = received.findLast(
+      (record) => record.path === "/openapi/v1/images/generation/estimate-credits" && record.body.prompt === prompt,
+    );
+    assert.deepEqual(req.body, {
+      provider: "openai",
+      model,
+      prompt,
+      referenceImages,
+      imageConfig: { imageSize: "4K", aspectRatio },
+    });
+  }
+});
+
 test("模型级参考图、尺寸和宽高比限制在本地拒绝", async () => {
   const referenceImages = Array.from({ length: 5 }, (_, index) => ({
     inlineData: { data: `image-${index}`, mimeType: "image/png" },
@@ -776,6 +835,16 @@ test("模型级参考图、尺寸和宽高比限制在本地拒绝", async () =>
       model: "gpt-image-2",
       prompt: "too many references",
       referenceImages,
+    },
+    {
+      model: "gpt-image-2.5-flare",
+      prompt: "too many 2.5 references",
+      referenceImages,
+    },
+    {
+      model: "gpt-image-2.5-sunburst",
+      prompt: "unsupported 2.5 ratio",
+      imageConfig: { aspectRatio: "1:8" },
     },
     {
       model: "wan2.7-image",
