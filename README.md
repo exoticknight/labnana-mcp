@@ -261,6 +261,8 @@ To inspect the real single-file MCP App without calling Labnana or spending cred
 
 For optional live API checks, put `LABNANA_API_KEY` in the repository-root `.env` and run `npm run test:real`. It checks the subscription and estimates both GPT-Image-2.5 variants without generating images or spending credits; the tests skip when the key is not configured.
 
+To verify actual image generation, first run `npm run build`, then run `node test/e2e-generate.mjs`. This spends credits. Set `LABNANA_TEST_MODEL`, `LABNANA_TEST_IMAGE_SIZE`, `LABNANA_TEST_ASPECT_RATIO`, `LABNANA_TEST_PROMPT`, and `LABNANA_OUTPUT_DIR` to choose the model, output, and save location. Generated originals go under `labnana-images/` by default and are ignored by Git.
+
 ## Links
 
 - [Labnana integration guide](https://labnana.com/docs/openapi/guide)

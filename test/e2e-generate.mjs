@@ -2,7 +2,9 @@
  * 真实图片生成验证脚本（会扣积分，不纳入 npm test）：
  * 读取 .env 的 LABNANA_API_KEY，走 MCP stdio 调用 generate_image，
  * 验证 2.1 统一 envelope、图片预览和本地原图路径。
- * 用法：node test/e2e-generate.mjs
+ * 可通过 LABNANA_TEST_MODEL / LABNANA_TEST_IMAGE_SIZE / LABNANA_TEST_ASPECT_RATIO /
+ * LABNANA_TEST_PROMPT 指定生成参数；默认仍测试 Gemini。
+ * 用法：node test/e2e-generate.mjs [taskId]
  */
 import { spawn } from "node:child_process";
 import readline from "node:readline";
@@ -43,6 +45,14 @@ function makeRequest(process, rl, method, params) {
 }
 
 async function main() {
+  const generation = {
+    model: process.env.LABNANA_TEST_MODEL || "gemini-3-pro-image",
+    prompt: process.env.LABNANA_TEST_PROMPT || "一只红色狐狸在雪地里奔跑，阳光洒在雪面上，摄影风格",
+    imageConfig: {
+      imageSize: process.env.LABNANA_TEST_IMAGE_SIZE || "1K",
+      aspectRatio: process.env.LABNANA_TEST_ASPECT_RATIO || "1:1",
+    },
+  };
   const server = spawn(process.execPath, [SERVER_ENTRY], {
     env: { ...process.env, LABNANA_API_KEY: apiKey },
   });
@@ -66,6 +76,9 @@ async function main() {
     server.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
 
     const existingTaskId = process.argv[2];
+    if (!existingTaskId) {
+      console.log(`真实出图测试：${generation.model} / ${generation.imageConfig.imageSize} / ${generation.imageConfig.aspectRatio}（会消耗积分）`);
+    }
     const response = existingTaskId
       ? await req("tools/call", {
           name: "get_generation_task",
@@ -73,18 +86,24 @@ async function main() {
         })
       : await req("tools/call", {
           name: "generate_image",
-          arguments: {
-            model: "gemini-3-pro-image",
-            prompt: "一只红色狐狸在雪地里奔跑，阳光洒在雪面上，摄影风格",
-            imageConfig: { imageSize: "1K", aspectRatio: "1:1" },
-          },
+          arguments: generation,
         });
+    if (response.error) {
+      console.error("MCP 请求失败：", response.error.message);
+      process.exitCode = 1;
+      return;
+    }
     if (response.result?.isError) {
       console.error("生成失败：", response.result.content.at(-1)?.text);
       process.exitCode = 1;
       return;
     }
     const envelope = response.result.structuredContent;
+    if (!envelope) {
+      console.error("生成失败：响应缺少 structuredContent");
+      process.exitCode = 1;
+      return;
+    }
     console.log(`状态：${envelope.status}`);
     console.log(`图片预览块：${response.result.content.filter((item) => item.type === "image").length}`);
     for (const image of envelope.images ?? []) {
@@ -92,8 +111,11 @@ async function main() {
     }
     if (envelope.status === "pending") {
       console.log(`任务仍在运行，稍后重新执行：node test/e2e-generate.mjs ${envelope.taskId}`);
-    } else {
+    } else if (envelope.status === "succeeded") {
       console.log("生成链路验证成功 ✅");
+    } else {
+      console.error("生成任务未成功完成");
+      process.exitCode = 1;
     }
   } catch (error) {
     console.error("验证失败：", error.message);

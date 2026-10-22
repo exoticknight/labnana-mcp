@@ -261,6 +261,8 @@ npm test
 
 如需额外验证真实 API，可在仓库根目录 `.env` 中配置 `LABNANA_API_KEY`，然后运行 `npm run test:real`。它会查询订阅并估价 GPT-Image-2.5 两个变体，不生成图片、不消耗积分；未配置密钥时测试会跳过。
 
+如需验证实际出图，先运行 `npm run build`，再运行 `node test/e2e-generate.mjs`；此操作会消耗积分。可通过 `LABNANA_TEST_MODEL`、`LABNANA_TEST_IMAGE_SIZE`、`LABNANA_TEST_ASPECT_RATIO`、`LABNANA_TEST_PROMPT` 和 `LABNANA_OUTPUT_DIR` 指定模型、生成参数与保存目录。原图默认保存在 `labnana-images/`，该目录已加入 Git 忽略。
+
 ## 相关链接
 
 - [Labnana 接入指南](https://labnana.com/docs/openapi/guide)
