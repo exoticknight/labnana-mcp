@@ -259,6 +259,8 @@ npm test
 
 To inspect the real single-file MCP App without calling Labnana or spending credits, run `npm run test:ui` and open `http://127.0.0.1:4173/test/mcp-app-host.html`. The local host sends a generated 640×360 PNG fixture through the official AppBridge so the image, status, and metadata can be checked visually.
 
+For optional live API checks, put `LABNANA_API_KEY` in the repository-root `.env` and run `npm run test:real`. It checks the subscription and estimates both GPT-Image-2.5 variants without generating images or spending credits; the tests skip when the key is not configured.
+
 ## Links
 
 - [Labnana integration guide](https://labnana.com/docs/openapi/guide)

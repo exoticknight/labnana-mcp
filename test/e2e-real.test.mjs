@@ -98,3 +98,28 @@ test("真实 API：estimate_credits 预估不扣积分", { skip: !hasKey && "未
   assert.equal(typeof data.canGenerate, "boolean");
   console.error(`[e2e] 预估：credits=${data.credits} canGenerate=${data.canGenerate}`);
 });
+
+for (const [model, aspectRatio] of [
+  ["gpt-image-2.5-flare", "4:5"],
+  ["gpt-image-2.5-sunburst", "5:4"],
+]) {
+  test(`真实 API：estimate_credits 接受 ${model}（不扣积分）`, { skip: !hasKey && "未配置 LABNANA_API_KEY（.env）" }, async () => {
+    const res = await request("tools/call", {
+      name: "estimate_credits",
+      arguments: {
+        model,
+        prompt: "a red fox in the snow",
+        imageConfig: { imageSize: "1K", aspectRatio },
+      },
+    });
+    assert.equal(res.error, undefined, `RPC 错误：${JSON.stringify(res.error)}`);
+    assert.ok(res.result, "应返回 result");
+    assert.equal(res.result?.isError, undefined, `调用失败：${JSON.stringify(res.result)}`);
+    const data = JSON.parse(res.result.content[0].text);
+    assert.equal(data.model, model);
+    assert.equal(data.aspectRatio, aspectRatio);
+    assert.equal(typeof data.credits, "number");
+    assert.equal(typeof data.canGenerate, "boolean");
+    console.error(`[e2e] ${model} ${aspectRatio} 预估：credits=${data.credits} canGenerate=${data.canGenerate}`);
+  });
+}

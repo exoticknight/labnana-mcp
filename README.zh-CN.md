@@ -259,6 +259,8 @@ npm test
 
 如需在完全不调用 Labnana、不消耗积分的情况下检查真实单文件 MCP App，可运行 `npm run test:ui`，再打开 `http://127.0.0.1:4173/test/mcp-app-host.html`。本地 host 会通过官方 AppBridge 发送一张动态生成的 640×360 PNG，用于目视检查图片、状态与元数据。
 
+如需额外验证真实 API，可在仓库根目录 `.env` 中配置 `LABNANA_API_KEY`，然后运行 `npm run test:real`。它会查询订阅并估价 GPT-Image-2.5 两个变体，不生成图片、不消耗积分；未配置密钥时测试会跳过。
+
 ## 相关链接
 
 - [Labnana 接入指南](https://labnana.com/docs/openapi/guide)
