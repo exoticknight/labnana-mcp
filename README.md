@@ -17,11 +17,13 @@ Current OpenAPI models (product names mapped to the `model` parameter):
 | Nano Banana Pro | `gemini-3-pro-image` | Google | 1K / 2K / 4K | In-image text, character consistency, high-fidelity output |
 | Nano Banana 2 | `gemini-3.1-flash-image` | Google | 1K / 2K / 4K | Fast iteration and extreme aspect ratios |
 | GPT-Image-2 | `gpt-image-2` | OpenAI | 1K / 2K / 4K | Spec-driven generation, layout control, illustration |
+| GPT-Image-2.5 Flare | `gpt-image-2.5-flare` | OpenAI | 1K / 2K / 4K | Faster generation |
+| GPT-Image-2.5 Sunburst | `gpt-image-2.5-sunburst` | OpenAI | 1K / 2K / 4K | Detail-dense images |
 | Wan2.7 Image Pro | `wan2.7-image-pro` | Alibaba | 1K / 2K / 4K¹ | Photoreal and poster-style images |
 | Wan2.7 Image | `wan2.7-image` | Alibaba | 1K / 2K | Lower-cost everyday generation |
 | Seedream 5.0 Pro | `seedream-5-0-pro` | ByteDance | 1K / 2K | Coordinate-driven region editing and Chinese instructions |
 
-¹ `wan2.7-image-pro` supports 4K only for text-to-image; generations with reference images are limited to 2K. Treat the [Labnana OpenAPI guide](https://labnana.com/docs/openapi/guide) as authoritative for model IDs.
+¹ `wan2.7-image-pro` supports 4K only for text-to-image; generations with reference images are limited to 2K. The OpenAPI reference lists GPT-Image-2.5 Flare and Sunburst; the model directory lists 1K / 2K / 4K and 10 aspect ratios, while the integration guide has not yet added the variants to its model list. Both variants support up to four reference images and cost the same. Check `estimate_credits` for the current price before generation.
 
 [GitHub](https://github.com/exoticknight/labnana-mcp) · [npm](https://www.npmjs.com/package/@exoticknight/labnana-mcp) · [MCP Registry](https://registry.modelcontextprotocol.io/?q=io.github.exoticknight%2Flabnana-mcp) · [Glama](https://glama.ai/mcp/servers/exoticknight/labnana-mcp) · [中文文档](README.zh-CN.md)
 
@@ -211,10 +213,10 @@ Use `referenceImages` for image-to-image generation and editing. `fileData.fileU
 
 ## Parameters
 
-- `model` (default: `gemini-3-pro-image`): `gemini-3-pro-image`, `gemini-3.1-flash-image`, `gpt-image-2`, `wan2.7-image-pro`, `wan2.7-image`, or `seedream-5-0-pro`. The provider is derived from the model automatically.
+- `model` (default: `gemini-3-pro-image`): `gemini-3-pro-image`, `gemini-3.1-flash-image`, `gpt-image-2`, `gpt-image-2.5-flare`, `gpt-image-2.5-sunburst`, `wan2.7-image-pro`, `wan2.7-image`, or `seedream-5-0-pro`. The provider is derived from the model automatically. Use `estimate_credits` to confirm a GPT-Image-2.5 size and cost before generation.
 - `imageConfig.imageSize`: `1K`, `2K`, or `4K`. `wan2.7-image` and `seedream-5-0-pro` do not support 4K; `wan2.7-image-pro` also disallows 4K when reference images are present.
-- `imageConfig.aspectRatio`: `1:1`, `2:3`, `3:2`, `3:4`, `4:3`, `9:16`, `16:9`, `21:9`, `1:4`, `4:1`, `1:8`, or `8:1`. GPT-Image-2 may omit this field and let the service choose; Wan2.7 supports only `1:1`, `16:9`, `9:16`, `4:3`, and `3:4`.
-- `referenceImages`: OpenAPI allows up to 14 for Gemini, 4 for GPT-Image-2, 9 for Wan2.7, and 10 for Seedream. These are API limits, not the separate upload limits of the web generator.
+- `imageConfig.aspectRatio`: `1:1`, `2:3`, `3:2`, `3:4`, `4:3`, `4:5`, `5:4`, `9:16`, `16:9`, `21:9`, `1:4`, `4:1`, `1:8`, or `8:1`. GPT-Image-2 may omit this field and let the service choose; GPT-Image-2.5 supports the ten ratios from `1:1` through `21:9`; Wan2.7 supports only `1:1`, `16:9`, `9:16`, `4:3`, and `3:4`.
+- `referenceImages`: OpenAPI allows up to 14 for Gemini, 4 for GPT-Image-2 / GPT-Image-2.5, 9 for Wan2.7, and 10 for Seedream. These are API limits, not the separate upload limits of the web generator.
 - Seedream precise editing: put the source image in `referenceImages` and describe the target region and change in `prompt` using absolute coordinates from the top-left origin. OpenAPI has no separate `mask` or `region` parameter.
 - `outputMode` (`generate_image` only): `hybrid` (default, save originals and inline bounded previews), `file` (save originals and return metadata only), or `inline` (do not save to `saveDir`; return a bounded preview, and persist the original to the default recovery directory only when the upstream response has no original URL).
 - `saveDir` / `timeoutSeconds` (`generate_image` only): target directory for `hybrid`/`file` mode, and the maximum wait for async (4K) generations.
@@ -229,6 +231,12 @@ Use `referenceImages` for image-to-image generation and editing. `fileData.fileU
 | `wan2.7-image-pro` | 6 | 8 | 12 (text-to-image only) |
 | `wan2.7-image` | 4 | 6 | Not supported |
 | `seedream-5-0-pro` | 6 | 15 | Not supported |
+
+GPT-Image-2.5 Flare and Sunburst have the same price, but the integration guide does not list their size-specific credit values. Call `estimate_credits` with the intended model and `imageConfig` for the current cost and supported configuration.
+
+### Free usage
+
+`get_subscription` returns `freeUsages`. This quota is shared with the Labnana website and ListenHub app. Nano Banana Pro free usage applies to 1K / 2K only; 4K is always charged in credits. When using that free quota, a never-paid account may receive a retryable busy error on the low-priority lane; retries do not consume the free quota or credits.
 
 ## Errors
 
@@ -251,10 +259,15 @@ npm test
 
 To inspect the real single-file MCP App without calling Labnana or spending credits, run `npm run test:ui` and open `http://127.0.0.1:4173/test/mcp-app-host.html`. The local host sends a generated 640×360 PNG fixture through the official AppBridge so the image, status, and metadata can be checked visually.
 
+For optional live API checks, put `LABNANA_API_KEY` in the repository-root `.env` and run `npm run test:real`. It checks the subscription and estimates both GPT-Image-2.5 variants without generating images or spending credits; the tests skip when the key is not configured.
+
+To verify actual image generation, first run `npm run build`, then run `node test/e2e-generate.mjs`. This spends credits. Set `LABNANA_TEST_MODEL`, `LABNANA_TEST_IMAGE_SIZE`, `LABNANA_TEST_ASPECT_RATIO`, `LABNANA_TEST_PROMPT`, and `LABNANA_OUTPUT_DIR` to choose the model, output, and save location. Generated originals go under `labnana-images/` by default and are ignored by Git.
+
 ## Links
 
 - [Labnana integration guide](https://labnana.com/docs/openapi/guide)
 - [Labnana OpenAPI reference](https://docs.marswave.ai/openapi-labnana.html)
+- [Labnana model directory](https://labnana.com/models)
 - [Credit guide](https://labnana.com/docs/pricing/credits)
 - [GitHub repository](https://github.com/exoticknight/labnana-mcp)
 - [Official MCP Registry](https://registry.modelcontextprotocol.io/?q=io.github.exoticknight%2Flabnana-mcp)

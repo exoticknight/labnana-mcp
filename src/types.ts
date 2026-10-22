@@ -10,6 +10,8 @@ export const MODELS = [
   "gemini-3-pro-image",
   "gemini-3.1-flash-image",
   "gpt-image-2",
+  "gpt-image-2.5-flare",
+  "gpt-image-2.5-sunburst",
   "wan2.7-image-pro",
   "wan2.7-image",
   "seedream-5-0-pro",
@@ -25,6 +27,8 @@ export const ASPECT_RATIOS = [
   "3:2",
   "3:4",
   "4:3",
+  "4:5",
+  "5:4",
   "9:16",
   "16:9",
   "21:9",
@@ -58,7 +62,7 @@ export interface ReferenceImage {
 export interface ImageConfig {
   /** 分辨率：1K / 2K / 4K（wan2.7-image 不支持 4K；seedream-5-0-pro 仅 1K/2K） */
   imageSize?: ImageSize;
-  /** 宽高比；GPT-Image-2 可不传由服务端自动选择 */
+  /** 宽高比；GPT-Image-2 可不传由服务端自动选择，GPT-Image-2.5 支持 10 种常用比例 */
   aspectRatio?: AspectRatio;
   /** 质量档位（透传给服务端） */
   quality?: string;

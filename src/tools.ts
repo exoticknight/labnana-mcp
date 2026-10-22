@@ -31,12 +31,19 @@ import type {
 } from "./types.js";
 
 const DEFAULT_MODEL = "gemini-3-pro-image" as const;
+const COMMON_ASPECT_RATIOS = ["1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9", "21:9"] as const;
+const EXTENDED_ASPECT_RATIOS = ["1:4", "4:1", "1:8", "8:1"] as const;
+const GPT_IMAGE_2_5_ASPECT_RATIOS = [
+  "1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9",
+] as const;
 
 /** provider 由 model 唯一决定，不需要调用方传入 */
 const MODEL_PROVIDERS: Record<(typeof MODELS)[number], Provider> = {
   "gemini-3-pro-image": "google",
   "gemini-3.1-flash-image": "google",
   "gpt-image-2": "openai",
+  "gpt-image-2.5-flare": "openai",
+  "gpt-image-2.5-sunburst": "openai",
   "wan2.7-image-pro": "alibaba",
   "wan2.7-image": "alibaba",
   "seedream-5-0-pro": "bytedance",
@@ -46,18 +53,22 @@ const MODEL_REFERENCE_LIMITS: Record<(typeof MODELS)[number], number> = {
   "gemini-3-pro-image": 14,
   "gemini-3.1-flash-image": 14,
   "gpt-image-2": 4,
+  "gpt-image-2.5-flare": 4,
+  "gpt-image-2.5-sunburst": 4,
   "wan2.7-image-pro": 9,
   "wan2.7-image": 9,
   "seedream-5-0-pro": 10,
 };
 
 const MODEL_ASPECT_RATIOS: Record<(typeof MODELS)[number], readonly (typeof ASPECT_RATIOS)[number][]> = {
-  "gemini-3-pro-image": ["1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9", "21:9"],
-  "gemini-3.1-flash-image": [...ASPECT_RATIOS],
-  "gpt-image-2": ["1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9", "21:9"],
+  "gemini-3-pro-image": COMMON_ASPECT_RATIOS,
+  "gemini-3.1-flash-image": [...COMMON_ASPECT_RATIOS, ...EXTENDED_ASPECT_RATIOS],
+  "gpt-image-2": COMMON_ASPECT_RATIOS,
+  "gpt-image-2.5-flare": GPT_IMAGE_2_5_ASPECT_RATIOS,
+  "gpt-image-2.5-sunburst": GPT_IMAGE_2_5_ASPECT_RATIOS,
   "wan2.7-image-pro": ["1:1", "3:4", "4:3", "9:16", "16:9"],
   "wan2.7-image": ["1:1", "3:4", "4:3", "9:16", "16:9"],
-  "seedream-5-0-pro": [...ASPECT_RATIOS],
+  "seedream-5-0-pro": [...COMMON_ASPECT_RATIOS, ...EXTENDED_ASPECT_RATIOS],
 };
 
 const MODEL_DESCRIPTION =
@@ -65,6 +76,7 @@ const MODEL_DESCRIPTION =
   "gemini-3-pro-image 综合最强、指令遵循和文字渲染好（15 积分/1K-2K）；" +
   "gemini-3.1-flash-image 快速便宜的日常生成（10 积分）；" +
   "gpt-image-2 性价比最高（4 积分起）；" +
+  "gpt-image-2.5-flare 偏快速出图，gpt-image-2.5-sunburst 偏细节密集；两者同价，具体尺寸和积分先用 estimate_credits 查询；" +
   "wan2.7-image-pro / wan2.7-image 写实与海报风格；" +
   "seedream-5-0-pro 擅长精准局部编辑（配合参考图使用）";
 
@@ -114,7 +126,7 @@ const generationFields = {
   prompt: z.string().min(1, "prompt 不能为空"),
   referenceImages: z
     .array(referenceImageSchema)
-    .max(14, "参考图片最多 14 张（GPT-Image-2 最多 4 张，Wan2.7 最多 9 张，Seedream 最多 10 张）")
+    .max(14, "参考图片最多 14 张（GPT-Image-2/2.5 最多 4 张，Wan2.7 最多 9 张，Seedream 最多 10 张）")
     .optional()
     .describe("图生图 / 改图的参考图片，支持 fileUri（gs:// 或 https://）或 base64 inlineData"),
   imageConfig: imageConfigSchema,
@@ -664,7 +676,7 @@ export function registerTools(
       description:
         "文生图 / 图生图 / 改图的一站式工具：默认保存完整原图，同时返回有大小上限的 MCP 图片预览、结构化元数据和 JSON 文本兜底。" +
         "大图（4K）会自动走异步任务并在内部等待完成，无需手动轮询。" +
-        "支持 Gemini 系列、GPT-Image-2、Wan2.7、Seedream 5.0 Pro，模型由 model 参数选择，无需指定提供商。",
+        "支持 Gemini 系列、GPT-Image-2 / 2.5、Wan2.7、Seedream 5.0 Pro，模型由 model 参数选择，无需指定提供商。",
       inputSchema: generateImageArgsSchema,
       outputSchema: generationResultOutputShape,
       _meta: IMAGE_RESULT_UI_META,
