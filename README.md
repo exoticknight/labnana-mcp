@@ -49,7 +49,7 @@ npx -y @exoticknight/labnana-mcp
 
 ### DeepSeek Harness (DSH)
 
-Add the server through DSH's official MCP client plugin. Pin `2.1.1` when you want the version shown by `initialize` to identify this MCP Apps-capable build:
+Add the server through DSH's official MCP client plugin. Pin `2.2.0` when you want the version shown by `initialize` to identify this MCP Apps-capable build:
 
 ```yaml
 - id: mcp-labnana
@@ -58,7 +58,7 @@ Add the server through DSH's official MCP client plugin. Pin `2.1.1` when you wa
     serverName: labnana
     transport: stdio
     command: npx
-    args: ['-y', '@exoticknight/labnana-mcp@2.1.1']
+    args: ['-y', '@exoticknight/labnana-mcp@2.2.0']
     env:
       LABNANA_API_KEY: !!js process.env.LABNANA_API_KEY
 ```

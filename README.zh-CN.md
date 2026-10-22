@@ -49,7 +49,7 @@ npx -y @exoticknight/labnana-mcp
 
 ### DeepSeek Harness（DSH）
 
-通过 DSH 官方 MCP client 插件接入。若要用 `initialize` 返回的版本明确识别支持 MCP Apps 的构建，可固定到 `2.1.1`：
+通过 DSH 官方 MCP client 插件接入。若要用 `initialize` 返回的版本明确识别支持 MCP Apps 的构建，可固定到 `2.2.0`：
 
 ```yaml
 - id: mcp-labnana
@@ -58,7 +58,7 @@ npx -y @exoticknight/labnana-mcp
     serverName: labnana
     transport: stdio
     command: npx
-    args: ['-y', '@exoticknight/labnana-mcp@2.1.1']
+    args: ['-y', '@exoticknight/labnana-mcp@2.2.0']
     env:
       LABNANA_API_KEY: !!js process.env.LABNANA_API_KEY
 ```
