@@ -1,6 +1,6 @@
 {
   "name": "@exoticknight/labnana-mcp",
-  "version": "2.1.1",
+  "version": "2.2.0",
   "mcpName": "io.github.exoticknight/labnana-mcp",
   "description": "MCP server for the Labnana image generation OpenAPI",
   "author": "exoticknight",

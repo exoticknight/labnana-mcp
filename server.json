@@ -7,12 +7,12 @@
     "url": "https://github.com/exoticknight/labnana-mcp",
     "source": "github"
   },
-  "version": "2.1.1",
+  "version": "2.2.0",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "@exoticknight/labnana-mcp",
-      "version": "2.1.1",
+      "version": "2.2.0",
       "transport": {
         "type": "stdio"
       },
